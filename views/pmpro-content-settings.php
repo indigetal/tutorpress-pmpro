@@ -4,8 +4,8 @@
  *
  * @package TutorPro\Addons
  * @subpackage PmPro\Views
- * @author Themeum <support@themeum.com>
- * @link https://themeum.com
+ * @author Indigetal WebCraft<support@indigetal.com>
+ * @link https://indigetal.com
  * @since 1.3.5
  */
 

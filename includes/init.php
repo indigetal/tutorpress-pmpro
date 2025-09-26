@@ -15,17 +15,18 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-/**
- * Class Init
- */
-class Init {
-	//phpcs:disable
-	public $version = TUTORPRESS_PMPRO_VERSION;
-	public $path;
-	public $url;
-	public $basename;
-	private $paid_memberships_pro;
-	//phpcs:enable
+	/**
+	 * Class Init
+	 */
+	class Init {
+		//phpcs:disable
+		public $version = TUTORPRESS_PMPRO_VERSION;
+		public $path;
+		public $url;
+		public $basename;
+		private $paid_memberships_pro;
+		private $recursion_guard = false;
+		//phpcs:enable
 
 	/**
 	 * Constructor
@@ -202,7 +203,12 @@ class Init {
 			return $addons;
 		}
 
-		$monetize_by = tutor_utils()->get_option( 'monetize_by', '' );
+		// Set recursion guard and get monetize_by directly from database to avoid filter loops
+		$this->recursion_guard = true;
+		$options = get_option( 'tutor_option', array() );
+		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+		$this->recursion_guard = false;
+
 		if ( 'pmpro' !== $monetize_by ) {
 			return $addons;
 		}
@@ -263,6 +269,11 @@ class Init {
 	 * @return mixed
 	 */
 	public function intercept_monetize_by_for_course_bundle( $value, $key ) {
+		// Prevent infinite recursion
+		if ( $this->recursion_guard ) {
+			return $value;
+		}
+
 		// Only intercept the monetize_by option.
 		if ( 'monetize_by' !== $key ) {
 			return $value;
@@ -308,7 +319,12 @@ class Init {
 			return;
 		}
 
-		$monetize_by = tutor_utils()->get_option( 'monetize_by', '' );
+		// Set recursion guard and get monetize_by directly from database to avoid filter loops
+		$this->recursion_guard = true;
+		$options = get_option( 'tutor_option', array() );
+		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+		$this->recursion_guard = false;
+
 		if ( 'pmpro' !== $monetize_by ) {
 			return;
 		}
@@ -414,7 +430,12 @@ class Init {
 			return $is_valid_type;
 		}
 
-		$monetize_by = tutor_utils()->get_option( 'monetize_by', '' );
+		// Set recursion guard and get monetize_by directly from database to avoid filter loops
+		$this->recursion_guard = true;
+		$options = get_option( 'tutor_option', array() );
+		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+		$this->recursion_guard = false;
+
 		if ( 'pmpro' !== $monetize_by ) {
 			return $is_valid_type;
 		}
@@ -439,7 +460,12 @@ class Init {
 			return $post_type;
 		}
 
-		$monetize_by = tutor_utils()->get_option( 'monetize_by', '' );
+		// Set recursion guard and get monetize_by directly from database to avoid filter loops
+		$this->recursion_guard = true;
+		$options = get_option( 'tutor_option', array() );
+		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+		$this->recursion_guard = false;
+
 		if ( 'pmpro' !== $monetize_by ) {
 			return $post_type;
 		}
@@ -457,6 +483,11 @@ class Init {
 	 * @return mixed
 	 */
 	public function intercept_tutor_utils_for_course_bundle( $pre_option, $option ) {
+		// Prevent infinite recursion
+		if ( $this->recursion_guard ) {
+			return $pre_option;
+		}
+
 		// Only intercept when PMPro is selected and we're in Course Bundle context
 		if ( 'tutor_option' !== $option ) {
 			return $pre_option;
@@ -466,7 +497,12 @@ class Init {
 			return $pre_option;
 		}
 
-		$monetize_by = tutor_utils()->get_option( 'monetize_by', '' );
+		// Set recursion guard and get monetize_by directly from database to avoid filter loops
+		$this->recursion_guard = true;
+		$options = get_option( 'tutor_option', array() );
+		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+		$this->recursion_guard = false;
+
 		if ( 'pmpro' !== $monetize_by ) {
 			return $pre_option;
 		}
@@ -486,8 +522,7 @@ class Init {
 		}
 
 		if ( $in_bundle_context ) {
-			// Get the actual tutor option and modify the monetize_by value
-			$options = get_option( 'tutor_option', array() );
+			// Return modified options where monetize_by is 'tutor' for Course Bundle
 			if ( is_array( $options ) ) {
 				$options['monetize_by'] = 'tutor'; // Make Course Bundle think it's native
 				return $options;
