@@ -77,13 +77,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Ensure tutor_bundle_post_type filter returns course-bundle when PMPro is selected
 		add_filter( 'tutor_bundle_post_type', array( $this, 'ensure_bundle_post_type_for_pmpro' ), 10, 1 );
 
-        $has_pmpro   = tutor_utils()->has_pmpro();
+        // Prefer centralized core monetization helper when available; fall back to tutor_utils
+        if ( function_exists( 'tutorpress_monetization' ) ) {
+            $has_pmpro = tutorpress_monetization()->is_pmpro();
+        } else {
+            $has_pmpro = function_exists( 'tutor_utils' ) ? tutor_utils()->has_pmpro() : false;
+        }
 
-        // Only load the PMPro integration when the Paid Memberships Pro plugin exists.
-        // Previously this was gated on the Tutor monetization option (monetize_by === 'pmpro'),
-        // which prevented the PMPro level UI from appearing unless the admin had already
-        // selected PMPro as the site's eCommerce engine. Load whenever PMPro is present so
-        // admins can configure levels even before switching the monetization option.
+        // Only load the PMPro integration when PMPro is available.
         if ( ! $has_pmpro ) {
             return;
         }
