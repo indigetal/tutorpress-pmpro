@@ -125,7 +125,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// classes (e.g. TutorPress_REST_Controller) are loaded first. This prevents fatal
 		// errors when the controller class extends core controller classes.
 		$rest_controller = $this->path . 'includes/rest/class-pmpro-subscriptions-controller.php';
-		add_action( 'rest_api_init', function() use ( $rest_controller ) {
+		// Register PMPro subscription controller via TutorPress extension hook
+		add_action( 'tutorpress_register_rest_controllers', function() use ( $rest_controller ) {
 			if ( ! file_exists( $rest_controller ) ) {
 				return;
 			}
