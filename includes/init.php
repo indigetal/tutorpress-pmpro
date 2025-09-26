@@ -25,6 +25,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		public $url;
 		public $basename;
 		private $paid_memberships_pro;
+		private $monetization_helper;
 		private $recursion_guard = false;
 		//phpcs:enable
 
@@ -114,6 +115,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	public function load_TUTORPRESS_PMPRO() {
 		spl_autoload_register( array( $this, 'loader' ) );
 		$this->paid_memberships_pro = new PaidMembershipsPro();
+		// Instantiate monetization helper for safe option reads
+		if ( file_exists( $this->path . 'includes/class-monetization-helper.php' ) ) {
+			require_once $this->path . 'includes/class-monetization-helper.php';
+			$this->monetization_helper = new Monetization_Helper();
+		}
 
 		// Defer loading of REST controllers until REST API initialization so TutorPress core
 		// classes (e.g. TutorPress_REST_Controller) are loaded first. This prevents fatal
@@ -203,14 +209,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return $addons;
 		}
 
-		// Set recursion guard and get monetize_by directly from database to avoid filter loops
-		$this->recursion_guard = true;
-		$options = get_option( 'tutor_option', array() );
-		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
-		$this->recursion_guard = false;
-
-		if ( 'pmpro' !== $monetize_by ) {
-			return $addons;
+		// Prefer helper to avoid duplicating guard logic
+		if ( isset( $this->monetization_helper ) ) {
+			if ( ! $this->monetization_helper->is_pmpro() ) {
+				return $addons;
+			}
+		} else {
+			// Fallback: raw DB read under guard
+			$this->recursion_guard = true;
+			$options = get_option( 'tutor_option', array() );
+			$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+			$this->recursion_guard = false;
+			if ( 'pmpro' !== $monetize_by ) {
+				return $addons;
+			}
 		}
 
 		foreach ( $addons as $key => $addon ) {
@@ -303,6 +315,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		return $value;
 	}
+
 
 	/**
 	 * Force load Course Bundle addon functionality when PMPro is selected.
@@ -430,14 +443,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return $is_valid_type;
 		}
 
-		// Set recursion guard and get monetize_by directly from database to avoid filter loops
-		$this->recursion_guard = true;
-		$options = get_option( 'tutor_option', array() );
-		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
-		$this->recursion_guard = false;
-
-		if ( 'pmpro' !== $monetize_by ) {
-			return $is_valid_type;
+		// Use monetization helper if available to avoid duplicated guard logic
+		if ( isset( $this->monetization_helper ) ) {
+			if ( ! $this->monetization_helper->is_pmpro() ) {
+				return $is_valid_type;
+			}
+		} else {
+			// Fallback: read raw option under guard to avoid filter recursion
+			$this->recursion_guard = true;
+			$options = get_option( 'tutor_option', array() );
+			$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+			$this->recursion_guard = false;
+			if ( 'pmpro' !== $monetize_by ) {
+				return $is_valid_type;
+			}
 		}
 
 		// Allow course-bundle post type.
@@ -460,14 +479,18 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return $post_type;
 		}
 
-		// Set recursion guard and get monetize_by directly from database to avoid filter loops
-		$this->recursion_guard = true;
-		$options = get_option( 'tutor_option', array() );
-		$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
-		$this->recursion_guard = false;
-
-		if ( 'pmpro' !== $monetize_by ) {
-			return $post_type;
+		if ( isset( $this->monetization_helper ) ) {
+			if ( ! $this->monetization_helper->is_pmpro() ) {
+				return $post_type;
+			}
+		} else {
+			$this->recursion_guard = true;
+			$options = get_option( 'tutor_option', array() );
+			$monetize_by = isset( $options['monetize_by'] ) ? $options['monetize_by'] : '';
+			$this->recursion_guard = false;
+			if ( 'pmpro' !== $monetize_by ) {
+				return $post_type;
+			}
 		}
 
 		// Ensure it's always 'course-bundle' when PMPro is active
