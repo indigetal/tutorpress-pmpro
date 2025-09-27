@@ -9,6 +9,11 @@
 
 defined( 'ABSPATH' ) || exit;
 
+// Load mapper helper (small, local helper)
+if ( file_exists( __DIR__ . '/../class-pmpro-mapper.php' ) ) {
+	require_once __DIR__ . '/../class-pmpro-mapper.php';
+}
+
 class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controller {
 
 	/**
@@ -204,22 +209,13 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		// Build plans array from level IDs (or empty if none)
 		if ( ! empty( $level_ids ) ) {
+			$mapper = new \TutorPress_PMPro_Mapper();
 			foreach ( $level_ids as $lid ) {
 				$level = pmpro_getLevel( $lid );
 				if ( ! $level ) {
 					continue;
 				}
-				$plans[] = [
-					'id' => (int) $level->id,
-					'name' => $level->name,
-					'description' => $level->description,
-					'price' => (float) $level->initial_payment,
-					'recurring_price' => (float) ( isset( $level->billing_amount ) ? $level->billing_amount : 0 ),
-					'billing_period' => $level->cycle_period,
-					'billing_frequency' => (int) ( isset( $level->cycle_number ) ? $level->cycle_number : 0 ),
-					'trial_period' => ( isset( $level->trial_limit ) ? $level->trial_limit : 0 ),
-					'status' => 'active',
-				];
+				$plans[] = $mapper->map_pmpro_to_ui( $level );
 			}
 		}
 
@@ -270,20 +266,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 
 		if ( ! empty( $level_ids ) ) {
+			$mapper = new \TutorPress_PMPro_Mapper();
 			foreach ( $level_ids as $lid ) {
 				$level = pmpro_getLevel( $lid );
 				if ( ! $level ) continue;
-				$plans[] = [
-					'id' => (int) $level->id,
-					'name' => $level->name,
-					'description' => $level->description,
-					'price' => (float) $level->initial_payment,
-					'recurring_price' => (float) ( isset( $level->billing_amount ) ? $level->billing_amount : 0 ),
-					'billing_period' => $level->cycle_period,
-					'billing_frequency' => (int) ( isset( $level->cycle_number ) ? $level->cycle_number : 0 ),
-					'trial_period' => ( isset( $level->trial_limit ) ? $level->trial_limit : 0 ),
-					'status' => 'active',
-				];
+				$plans[] = $mapper->map_pmpro_to_ui( $level );
 			}
 		}
 
@@ -321,46 +308,31 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		global $wpdb;
 
-		// Prepare level data mapping
-		$plan_name = sanitize_text_field( $request->get_param( 'plan_name' ) );
-		$regular_price = floatval( $request->get_param( 'regular_price' ) ?? 0 );
-		$recurring_value = intval( $request->get_param( 'recurring_value' ) ?? 0 );
-		$recurring_interval = $request->get_param( 'recurring_interval' ) ?? '';
-		$recurring_limit = intval( $request->get_param( 'recurring_limit' ) ?? 0 );
-		$enrollment_fee = floatval( $request->get_param( 'enrollment_fee' ) ?? 0 );
-		$description = sanitize_textarea_field( $request->get_param( 'description' ) ?? '' );
+		// Prepare level data mapping using mapper helper
+		$mapper = new \TutorPress_PMPro_Mapper();
+		$level_data = $mapper->map_ui_to_pmpro( $request->get_params() );
 
-		// Normalize PMPro cycle period (Title case expected: Day, Week, Month, Year)
-		$cycle_period = $recurring_interval ? ucfirst( strtolower( $recurring_interval ) ) : '';
-
-		// Compose PMPro level array
-		$level_data = array(
-			'name' => $plan_name,
-			'description' => $description,
-			'initial_payment' => $enrollment_fee > 0 ? $enrollment_fee : $regular_price,
-			'billing_amount' => $request->get_param( 'recurring_price' ) ? floatval( $request->get_param( 'recurring_price' ) ) : 0,
-			'cycle_number' => $recurring_value,
-			'cycle_period' => $cycle_period,
-			'billing_limit' => $recurring_limit,
-			'trial_limit' => intval( $request->get_param( 'trial_value' ) ?? 0 ),
-			'trial_amount' => floatval( $request->get_param( 'trial_fee' ) ?? 0 ),
-		);
+		// Prepare DB-level data (strip UI-only meta before inserting into pmpro_membership_levels)
+		$db_level_data = $level_data;
+		if ( isset( $db_level_data['meta'] ) ) {
+			unset( $db_level_data['meta'] );
+		}
 
 		// Insert level using PMPro helper if available
 		if ( function_exists( 'pmpro_insert_or_replace' ) ) {
 			$table = $wpdb->pmpro_membership_levels;
 			$format = array();
-			foreach ( $level_data as $k => $v ) {
+			foreach ( $db_level_data as $k => $v ) {
 				$format[] = is_int( $v ) ? '%d' : ( is_float( $v ) ? '%f' : '%s' );
 			}
-			$result = pmpro_insert_or_replace( $table, $level_data, $format );
+			$result = pmpro_insert_or_replace( $table, $db_level_data, $format );
 			if ( ! $result ) {
 				return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to create PMPro level.', 'tutorpress-pmpro' ), 'database_error', 500 );
 			}
 			$level_id = is_array( $result ) && isset( $result['id'] ) ? intval( $result['id'] ) : intval( $wpdb->insert_id );
 		} else {
 			// Fallback direct insert
-			$insert = $wpdb->insert( $wpdb->pmpro_membership_levels, $level_data );
+			$insert = $wpdb->insert( $wpdb->pmpro_membership_levels, $db_level_data );
 			if ( $insert === false ) {
 				return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to create PMPro level.', 'tutorpress-pmpro' ), 'database_error', 500 );
 			}
@@ -384,9 +356,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			update_post_meta( $object_id, $meta_key, array_values( array_unique( $existing ) ) );
 
 			// Set reverse lookup on PMPro level meta
-			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-				update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $object_id );
-			} else {
+				if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+					update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $object_id );
+				} else {
 				// Fallback: try PMPro meta function names or generic postmeta on pmpro level table
 				try {
 					if ( function_exists( 'add_pmpro_membership_level_meta' ) ) {
@@ -395,22 +367,21 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				} catch ( Exception $e ) {
 					// ignore
 				}
+
+				// Persist any UI-only meta (sale_price etc.) if present in mapper output
+				if ( isset( $level_data['meta'] ) && is_array( $level_data['meta'] ) ) {
+					foreach ( $level_data['meta'] as $meta_key => $meta_val ) {
+						if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+							update_pmpro_membership_level_meta( $level_id, $meta_key, $meta_val );
+						}
+					}
+				}
 			}
 		}
 
-		// Return created level in TutorPress format
+		// Map created level back into TutorPress UI shape for response
 		$level = function_exists( 'pmpro_getLevel' ) ? pmpro_getLevel( $level_id ) : null;
-		$payload = [
-			'id' => $level_id,
-			'name' => $level ? $level->name : $plan_name,
-			'description' => $level ? $level->description : $description,
-			'price' => $level ? (float) $level->initial_payment : $level_data['initial_payment'],
-			'recurring_price' => $level ? (float) $level->billing_amount : $level_data['billing_amount'],
-			'billing_period' => $level ? $level->cycle_period : $level_data['cycle_period'],
-			'billing_frequency' => $level ? (int) $level->cycle_number : $level_data['cycle_number'],
-			'trial_period' => $level ? $level->trial_limit : $level_data['trial_limit'],
-			'status' => 'active',
-		];
+		$payload = $mapper->map_pmpro_to_ui( $level ?: (object) array_merge( array( 'id' => $level_id ), $level_data ) );
 
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'PMPro membership level created.', 'tutorpress-pmpro' ) ) );
 	}
@@ -438,6 +409,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		// Prepare update fields
 		$update_data = [];
+		$mapper = new \TutorPress_PMPro_Mapper();
 		if ( $request->has_param( 'plan_name' ) ) {
 			$update_data['name'] = sanitize_text_field( $request->get_param( 'plan_name' ) );
 		}
@@ -484,19 +456,19 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 
-		// Return the updated level
+		// Persist UI-only meta if provided
+		$incoming_meta = $mapper->map_ui_to_pmpro( $request->get_params() );
+		if ( isset( $incoming_meta['meta'] ) && is_array( $incoming_meta['meta'] ) ) {
+			foreach ( $incoming_meta['meta'] as $meta_key => $meta_val ) {
+				if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+					update_pmpro_membership_level_meta( $plan_id, $meta_key, $meta_val );
+				}
+			}
+		}
+
+		// Return the updated level using mapper
 		$level = pmpro_getLevel( $plan_id );
-		$payload = [
-			'id' => (int) $level->id,
-			'name' => $level->name,
-			'description' => $level->description,
-			'price' => (float) $level->initial_payment,
-			'recurring_price' => (float) $level->billing_amount,
-			'billing_period' => $level->cycle_period,
-			'billing_frequency' => (int) $level->cycle_number,
-			'trial_period' => $level->trial_limit,
-			'status' => 'active',
-		];
+		$payload = $mapper->map_pmpro_to_ui( $level );
 
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'PMPro membership level updated.', 'tutorpress-pmpro' ) ) );
 	}
