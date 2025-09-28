@@ -28,7 +28,8 @@ class TutorPress_PMPro_Mapper {
             'name'            => sanitize_text_field( $ui['plan_name'] ?? $ui['name'] ?? '' ),
             'description'     => sanitize_textarea_field( $ui['description'] ?? $ui['short_description'] ?? '' ),
             'initial_payment' => isset( $ui['enrollment_fee'] ) ? floatval( $ui['enrollment_fee'] ) : $regular_price,
-            'billing_amount'  => isset( $ui['recurring_price'] ) ? floatval( $ui['recurring_price'] ) : ( isset( $ui['recurring_value'] ) ? floatval( $ui['recurring_value'] ) : 0.0 ),
+            // Prefer explicit recurring monetary amount, fall back to regular price, then to recurring value (interval) as last resort
+            'billing_amount'  => isset( $ui['recurring_price'] ) ? floatval( $ui['recurring_price'] ) : ( isset( $ui['regular_price'] ) ? floatval( $ui['regular_price'] ) : ( isset( $ui['recurring_value'] ) ? floatval( $ui['recurring_value'] ) : 0.0 ) ),
             'cycle_number'    => $recurring_value,
             'cycle_period'    => $recurring_interval,
             'billing_limit'   => $recurring_limit,
