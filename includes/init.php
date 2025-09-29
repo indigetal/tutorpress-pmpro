@@ -93,6 +93,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$this->basename = plugin_basename( TUTORPRESS_PMPRO_FILE );
 
 		$this->load_TUTORPRESS_PMPRO();
+
+		// Auto-create one-time PMPro levels when selling_option is set to one_time
+		add_action( 'rest_after_insert_courses', array( $this, 'auto_create_one_time_level_for_course' ), 10, 3 );
+		add_action( 'rest_after_insert_course-bundle', array( $this, 'auto_create_one_time_level_for_bundle' ), 10, 3 );
 	}
 
 	public function notice_tutor_missing() {
@@ -551,6 +555,182 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 
 		return $pre_option;
+	}
+
+	/**
+	 * Auto-create a one-time PMPro level for courses when selling_option is one_time.
+	 *
+	 * @param WP_Post         $post     Inserted or updated post object.
+	 * @param WP_REST_Request $request  Request object.
+	 * @param bool            $creating True when creating a post, false when updating.
+	 * @return void
+	 */
+	public function auto_create_one_time_level_for_course( $post, $request, $creating ) {
+		$this->auto_create_one_time_level( $post->ID, 'course' );
+	}
+
+	/**
+	 * Auto-create a one-time PMPro level for bundles when selling_option is one_time.
+	 *
+	 * @param WP_Post         $post     Inserted or updated post object.
+	 * @param WP_REST_Request $request  Request object.
+	 * @param bool            $creating True when creating a post, false when updating.
+	 * @return void
+	 */
+	public function auto_create_one_time_level_for_bundle( $post, $request, $creating ) {
+		$this->auto_create_one_time_level( $post->ID, 'bundle' );
+	}
+
+	/**
+	 * Auto-create a one-time PMPro level when selling_option is one_time.
+	 *
+	 * @param int    $object_id   The course or bundle ID.
+	 * @param string $object_type 'course' or 'bundle'.
+	 * @return void
+	 */
+	private function auto_create_one_time_level( $object_id, $object_type ) {
+		// Only proceed if this is a course or bundle post.
+		$post_type = get_post_type( $object_id );
+		$valid_post_types = array( 'courses', 'course-bundle' );
+		if ( ! in_array( $post_type, $valid_post_types ) ) {
+			return;
+		}
+
+		// Check selling_option value
+		$selling_option = get_post_meta( $object_id, '_tutor_course_selling_option', true );
+		// We handle two cases here:
+		// - one_time: ensure a single one-time level exists and remove recurring ones
+		// - subscription: remove any one-time levels (keep recurring), don't auto-create
+		if ( ! in_array( $selling_option, array( 'one_time', 'subscription', 'both' ), true ) ) {
+			// For other options, just clean stale meta and exit.
+		}
+
+		// Gather attached and valid PMPro level IDs and classify by type.
+		$existing_levels = get_post_meta( $object_id, '_tutorpress_pmpro_levels', true );
+
+		global $wpdb;
+		$valid_ids    = array();
+		$one_time_ids = array();
+		$recurring_ids = array();
+		if ( ! empty( $existing_levels ) && is_array( $existing_levels ) ) {
+			foreach ( $existing_levels as $lvl_id ) {
+				$row = $wpdb->get_row( $wpdb->prepare( "SELECT id, billing_amount, cycle_number FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", absint( $lvl_id ) ), ARRAY_A );
+				if ( $row && isset( $row['id'] ) ) {
+					$valid_ids[] = (int) $row['id'];
+					$is_one_time = ( floatval( $row['billing_amount'] ) <= 0 ) && ( intval( $row['cycle_number'] ) === 0 );
+					if ( $is_one_time ) {
+						$one_time_ids[] = (int) $row['id'];
+					} else {
+						$recurring_ids[] = (int) $row['id'];
+					}
+				}
+			}
+		}
+
+		if ( empty( $valid_ids ) && ! empty( $existing_levels ) ) {
+			// Stale meta present; clear it so we can proceed.
+			delete_post_meta( $object_id, '_tutorpress_pmpro_levels' );
+		}
+
+		// If pricing type is free, remove all PMPro levels and clear meta.
+		$price_type = get_post_meta( $object_id, '_tutor_course_price_type', true );
+		if ( 'free' === $price_type ) {
+			if ( ! empty( $valid_ids ) ) {
+				foreach ( $valid_ids as $vid ) {
+					$wpdb->delete( $wpdb->pmpro_membership_levels, array( 'id' => $vid ), array( '%d' ) );
+				}
+			}
+			delete_post_meta( $object_id, '_tutorpress_pmpro_levels' );
+			return;
+		}
+
+		// If selling_option is subscription-only: remove any one-time levels and update meta.
+		if ( 'subscription' === $selling_option ) {
+			if ( ! empty( $one_time_ids ) ) {
+				foreach ( $one_time_ids as $oid ) {
+					$wpdb->delete( $wpdb->pmpro_membership_levels, array( 'id' => $oid ), array( '%d' ) );
+				}
+				$valid_ids = $recurring_ids; // remaining valid ids are recurring
+				update_post_meta( $object_id, '_tutorpress_pmpro_levels', $valid_ids );
+			}
+			return; // nothing else to do for subscription-only
+		}
+
+		// From here, handle one_time option: remove recurring, ensure single one-time exists
+		if ( 'one_time' !== $selling_option ) {
+			// For 'both' or others, no auto-create; just ensure meta has valid ids
+			if ( ! empty( $valid_ids ) ) {
+				update_post_meta( $object_id, '_tutorpress_pmpro_levels', $valid_ids );
+			}
+			return;
+		}
+
+		// Get the regular price from post meta.
+		$regular_price = get_post_meta( $object_id, 'tutor_course_price', true );
+		if ( empty( $regular_price ) || $regular_price <= 0 ) {
+			// No price set, skip auto-creation.
+			return;
+		}
+
+		// Load the mapper to prepare the PMPro level data.
+		require_once $this->path . 'includes/class-pmpro-mapper.php';
+		$mapper = new \TutorPress_PMPro_Mapper();
+
+		// Prepare UI-style payload for the mapper.
+		$post_title = get_the_title( $object_id );
+		$ui_payload = array(
+			'object_id'       => $object_id,
+			'plan_name'       => $post_title ? $post_title . ' (One-time)' : __( 'One-time Plan for ' . $object_id, 'tutorpress-pmpro' ),
+			'payment_type'    => 'one_time',
+			'regular_price'   => floatval( $regular_price ),
+			'recurring_price' => 0,
+			'recurring_value' => 0,
+			'recurring_interval' => '',
+			'recurring_limit' => 0,
+		);
+
+		// Map to PMPro format.
+		$db_level_data = $mapper->map_ui_to_pmpro( $ui_payload );
+
+		// Normalize for one-time: initial_payment = regular_price, billing_amount = 0.
+		$db_level_data['initial_payment'] = floatval( $regular_price );
+		$db_level_data['billing_amount'] = 0;
+		$db_level_data['cycle_number'] = 0;
+		$db_level_data['cycle_period'] = '';
+		$db_level_data['billing_limit'] = 0;
+
+		// Remove meta array before inserting into PMPro DB.
+		unset( $db_level_data['meta'] );
+
+		// First, remove any recurring levels currently attached
+		if ( ! empty( $recurring_ids ) ) {
+			foreach ( $recurring_ids as $rid ) {
+				$wpdb->delete( $wpdb->pmpro_membership_levels, array( 'id' => $rid ), array( '%d' ) );
+			}
+		}
+
+		// If an existing one-time level exists, update it. Otherwise create a new one.
+		$level_id = 0;
+		if ( ! empty( $one_time_ids ) ) {
+			$level_id = $one_time_ids[0];
+			$wpdb->update( $wpdb->pmpro_membership_levels, $db_level_data, array( 'id' => $level_id ) );
+			
+		} else {
+			$table = $wpdb->pmpro_membership_levels;
+			$wpdb->insert( $table, $db_level_data );
+			$level_id = $wpdb->insert_id;
+					
+		}
+
+		if ( empty( $level_id ) || $level_id <= 0 ) {
+			// Insert failed, log error and return.
+			return;
+		}
+
+		// Attach the single one-time level to the course/bundle.
+		update_post_meta( $object_id, '_tutorpress_pmpro_levels', array( $level_id ) );
+
+		// Successfully attached the level.
 	}
 
 }

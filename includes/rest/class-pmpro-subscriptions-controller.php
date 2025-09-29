@@ -363,6 +363,27 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			unset( $db_level_data['meta'] );
 		}
 
+		// Normalize one-time vs recurring semantics (core may send payment_type)
+		$payment_type = $request->get_param( 'payment_type' ) ?? ( isset( $level_data['payment_type'] ) ? $level_data['payment_type'] : null );
+		if ( 'one_time' === $payment_type ) {
+			$db_level_data['initial_payment'] = isset( $request['regular_price'] ) ? floatval( $request['regular_price'] ) : ( isset( $level_data['initial_payment'] ) ? $level_data['initial_payment'] : 0 );
+			$db_level_data['billing_amount'] = 0;
+			$db_level_data['cycle_number'] = 0;
+			$db_level_data['cycle_period'] = '';
+			$db_level_data['billing_limit'] = 0;
+		}
+
+		// Ensure level has a usable name for one-time plans only: prefer provided name, fall back to course title
+		$object_id_for_name = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
+		if ( empty( $db_level_data['name'] ) && 'one_time' === $payment_type ) {
+			$course_title = $object_id_for_name ? get_the_title( $object_id_for_name ) : '';
+			if ( $course_title ) {
+				$db_level_data['name'] = sanitize_text_field( sprintf( '%s (One-time)', $course_title ) );
+			} else {
+				$db_level_data['name'] = sprintf( 'One-time plan for %s', $object_id_for_name ? $object_id_for_name : 'site' );
+			}
+		}
+
 		// Insert level using PMPro helper if available
 		if ( function_exists( 'pmpro_insert_or_replace' ) ) {
 			$table = $wpdb->pmpro_membership_levels;
@@ -470,13 +491,25 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( $request->has_param( 'description' ) ) {
 			$update_data['description'] = sanitize_textarea_field( $request->get_param( 'description' ) );
 		}
-        // Initial payment (enrollment fee) should come from 'enrollment_fee' when using PMPro
-        if ( $request->has_param( 'enrollment_fee' ) ) {
-            $update_data['initial_payment'] = floatval( $request->get_param( 'enrollment_fee' ) );
-        }
-        // Recurring (renewal) payment should come from 'recurring_price' (billing_amount)
-        if ( $request->has_param( 'recurring_price' ) ) {
-            $update_data['billing_amount'] = floatval( $request->get_param( 'recurring_price' ) );
+        // Normalize create/update semantics depending on payment_type
+        $payment_type = $request->get_param( 'payment_type' );
+        if ( 'one_time' === $payment_type ) {
+            if ( $request->has_param( 'regular_price' ) ) {
+                $update_data['initial_payment'] = floatval( $request->get_param( 'regular_price' ) );
+            }
+            $update_data['billing_amount'] = 0;
+            $update_data['cycle_number'] = 0;
+            $update_data['cycle_period'] = '';
+            $update_data['billing_limit'] = 0;
+        } else {
+            // Initial payment (enrollment fee) should come from 'enrollment_fee' when using PMPro
+            if ( $request->has_param( 'enrollment_fee' ) ) {
+                $update_data['initial_payment'] = floatval( $request->get_param( 'enrollment_fee' ) );
+            }
+            // Recurring (renewal) payment should come from 'recurring_price' (billing_amount)
+            if ( $request->has_param( 'recurring_price' ) ) {
+                $update_data['billing_amount'] = floatval( $request->get_param( 'recurring_price' ) );
+            }
         }
 		if ( $request->has_param( 'recurring_value' ) ) {
 			$update_data['cycle_number'] = intval( $request->get_param( 'recurring_value' ) );

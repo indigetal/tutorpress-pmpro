@@ -24,12 +24,36 @@ class TutorPress_PMPro_Mapper {
         $recurring_interval = isset( $ui['recurring_interval'] ) ? ucfirst( strtolower( $ui['recurring_interval'] ) ) : '';
         $recurring_limit    = isset( $ui['recurring_limit'] ) ? intval( $ui['recurring_limit'] ) : 0;
 
+        $payment_type = isset( $ui['payment_type'] ) ? $ui['payment_type'] : null;
+
+        // One-time purchase mapping: initial payment is the one-time price, no recurring billing
+        if ( 'one_time' === $payment_type ) {
+            return array(
+                'name'            => sanitize_text_field( $ui['plan_name'] ?? $ui['name'] ?? '' ),
+                'description'     => sanitize_textarea_field( $ui['description'] ?? $ui['short_description'] ?? '' ),
+                'initial_payment' => isset( $ui['regular_price'] ) ? floatval( $ui['regular_price'] ) : $regular_price,
+                'billing_amount'  => 0,
+                'cycle_number'    => 0,
+                'cycle_period'    => '',
+                'billing_limit'   => 0,
+                'trial_limit'     => isset( $ui['trial_value'] ) ? intval( $ui['trial_value'] ) : 0,
+                'trial_amount'    => isset( $ui['trial_fee'] ) ? floatval( $ui['trial_fee'] ) : 0.0,
+                'meta'            => array(
+                    'sale_price' => isset( $ui['sale_price'] ) ? $ui['sale_price'] : null,
+                    'provide_certificate' => isset( $ui['provide_certificate'] ) ? (bool) $ui['provide_certificate'] : null,
+                    'is_featured' => isset( $ui['is_featured'] ) ? (bool) $ui['is_featured'] : null,
+                ),
+            );
+        }
+
+        // Recurring/default mapping
         return array(
             'name'            => sanitize_text_field( $ui['plan_name'] ?? $ui['name'] ?? '' ),
             'description'     => sanitize_textarea_field( $ui['description'] ?? $ui['short_description'] ?? '' ),
-            'initial_payment' => isset( $ui['enrollment_fee'] ) ? floatval( $ui['enrollment_fee'] ) : $regular_price,
-            // Prefer explicit recurring monetary amount, fall back to regular price, then to recurring value (interval) as last resort
-            'billing_amount'  => isset( $ui['recurring_price'] ) ? floatval( $ui['recurring_price'] ) : ( isset( $ui['regular_price'] ) ? floatval( $ui['regular_price'] ) : ( isset( $ui['recurring_value'] ) ? floatval( $ui['recurring_value'] ) : 0.0 ) ),
+            // initial_payment is enrollment_fee when provided, otherwise 0 (recurring plans often have no initial payment)
+            'initial_payment' => isset( $ui['enrollment_fee'] ) ? floatval( $ui['enrollment_fee'] ) : 0.0,
+            // Prefer explicit recurring monetary amount, fall back to regular price as last resort
+            'billing_amount'  => isset( $ui['recurring_price'] ) ? floatval( $ui['recurring_price'] ) : ( isset( $ui['regular_price'] ) ? floatval( $ui['regular_price'] ) : 0.0 ),
             'cycle_number'    => $recurring_value,
             'cycle_period'    => $recurring_interval,
             'billing_limit'   => $recurring_limit,
