@@ -706,6 +706,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( ! empty( $recurring_ids ) ) {
 			foreach ( $recurring_ids as $rid ) {
 				$wpdb->delete( $wpdb->pmpro_membership_levels, array( 'id' => $rid ), array( '%d' ) );
+					// Clean up any pmpro_memberships_pages associations for removed level
+				if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+					\TUTORPRESS_PMPRO\PMPro_Association::remove_associations_for_level( $rid );
+				}
 			}
 		}
 
@@ -729,6 +733,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		// Attach the single one-time level to the course/bundle.
 		update_post_meta( $object_id, '_tutorpress_pmpro_levels', array( $level_id ) );
+
+			// Ensure association row exists in pmpro_memberships_pages
+			if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+				\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
+			}
 
 		// Successfully attached the level.
 	}

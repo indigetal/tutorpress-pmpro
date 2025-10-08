@@ -13,6 +13,10 @@ defined( 'ABSPATH' ) || exit;
 if ( file_exists( __DIR__ . '/../class-pmpro-mapper.php' ) ) {
 	require_once __DIR__ . '/../class-pmpro-mapper.php';
 }
+// Association helper
+if ( file_exists( __DIR__ . '/../class-pmpro-association.php' ) ) {
+    require_once __DIR__ . '/../class-pmpro-association.php';
+}
 
 class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controller {
 
@@ -411,7 +415,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		// Associate level with course/bundle via post meta and level meta
 		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
-		if ( $object_id ) {
+        if ( $object_id ) {
 			// Update course/bundle meta array
 			$meta_key = '_tutorpress_pmpro_levels';
 			$existing = get_post_meta( $object_id, $meta_key, true );
@@ -510,6 +514,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
             if ( $request->has_param( 'recurring_price' ) ) {
                 $update_data['billing_amount'] = floatval( $request->get_param( 'recurring_price' ) );
             }
+
+            // Ensure PMPro association row (pmpro_memberships_pages) exists for the course
+            if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+                \TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
+            }
         }
 		if ( $request->has_param( 'recurring_value' ) ) {
 			$update_data['cycle_number'] = intval( $request->get_param( 'recurring_value' ) );
@@ -546,11 +555,15 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		// Optionally update mapping (course/bundle association)
 		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
-		if ( $object_id ) {
+        if ( $object_id ) {
 			// Ensure the level meta is set
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 				update_pmpro_membership_level_meta( $plan_id, 'tutorpress_course_id', intval( $object_id ) );
 			}
+            // Ensure association exists
+            if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+                \TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( intval( $object_id ), $plan_id );
+            }
 		}
 
 		// Persist UI-only meta if provided
@@ -613,6 +626,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				}
 			}
 		}
+
+        // Remove associations in pmpro_memberships_pages
+        if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+            \TUTORPRESS_PMPRO\PMPro_Association::remove_associations_for_level( $plan_id );
+        }
 
 		return rest_ensure_response( $this->format_response( null, __( 'PMPro membership level deleted.', 'tutorpress-pmpro' ) ) );
 	}
@@ -694,16 +712,21 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return new WP_Error( 'invalid_params', __( 'object_id and ordered_ids are required.', 'tutorpress-pmpro' ), [ 'status' => 400 ] );
 		}
 
-		// Sanitize IDs
+        // Sanitize IDs
 		$ordered_ids = array_values( array_filter( array_map( 'absint', $ordered_ids ) ) );
 		update_post_meta( $object_id, '_tutorpress_pmpro_levels', $ordered_ids );
 
 		// Best-effort: ensure reverse meta
-		if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+        if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 			foreach ( $ordered_ids as $lid ) {
 				update_pmpro_membership_level_meta( $lid, 'tutorpress_course_id', $object_id );
 			}
 		}
+
+        // Sync associations to match the ordered IDs
+        if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+            \TUTORPRESS_PMPRO\PMPro_Association::sync_course_level_associations( $object_id, $ordered_ids );
+        }
 
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $ordered_ids, __( 'Subscription plans reordered.', 'tutorpress-pmpro' ) ) );
 	}
