@@ -179,7 +179,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			]
 		);
 
-		// Sort subscription plans for a course/bundle (store order in post meta)
+		// Sort subscription plans for a course/bundle (no longer stores order in post meta)
 		register_rest_route(
 			$this->namespace,
 			'/' . $this->rest_base . '/sort',
@@ -413,17 +413,13 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to determine new level ID.', 'tutorpress-pmpro' ), 'database_error', 500 );
 		}
 
-		// Associate level with course/bundle via post meta and level meta
+		// Associate level with course/bundle via pmpro_memberships_pages and level meta
 		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
         if ( $object_id ) {
-			// Update course/bundle meta array
-			$meta_key = '_tutorpress_pmpro_levels';
-			$existing = get_post_meta( $object_id, $meta_key, true );
-			if ( ! is_array( $existing ) ) {
-				$existing = array();
+			// Ensure association row exists in pmpro_memberships_pages
+			if ( class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
+				\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
 			}
-			$existing[] = $level_id;
-			update_post_meta( $object_id, $meta_key, array_values( array_unique( $existing ) ) );
 
 			// Set reverse lookup on PMPro level meta
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
@@ -700,7 +696,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	}
 
 	/**
-	 * Sort subscription plans for a course/bundle by storing ordered IDs in post meta.
+	 * Sort subscription plans for a course/bundle (no longer stores order in post meta)
 	 *
 	 * @param WP_REST_Request $request
 	 * @return WP_REST_Response|WP_Error
@@ -714,7 +710,6 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
         // Sanitize IDs
 		$ordered_ids = array_values( array_filter( array_map( 'absint', $ordered_ids ) ) );
-		update_post_meta( $object_id, '_tutorpress_pmpro_levels', $ordered_ids );
 
 		// Best-effort: ensure reverse meta
         if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {

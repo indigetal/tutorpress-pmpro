@@ -60,7 +60,12 @@ class PaidMembershipsPro {
             add_action( 'admin_enqueue_scripts', array( $this, 'admin_script' ) );
 
             add_filter( 'tutor_course_expire_validity', array( $this, 'filter_expire_time' ), 99, 2 );
-            add_action( 'pmpro_after_change_membership_level', array( $this, 'remove_course_access' ), 10, 3 );
+			add_action( 'pmpro_after_change_membership_level', array( $this, 'remove_course_access' ), 10, 3 );
+
+			// Step 4: keep Tutor enrollment in sync with PMPro membership level changes
+			add_action( 'pmpro_after_all_membership_level_changes', array( $this, 'pmpro_after_all_membership_level_changes' ) );
+			add_action( 'pmpro_after_change_membership_level', array( $this, 'pmpro_after_change_membership_level' ), 10, 3 );
+			add_action( 'pmpro_after_checkout', array( $this, 'pmpro_after_checkout_enroll' ), 10, 2 );
         }
     }
 
@@ -755,6 +760,204 @@ class PaidMembershipsPro {
         );
         return $term_ids;
     }
+
+	/**
+	 * Map PMPro membership level IDs to Tutor LMS course IDs using pmpro_memberships_pages.
+	 *
+	 * @param array|int $level_ids
+	 * @return array<int> course IDs
+	 */
+	private function get_courses_for_levels( $level_ids ) {
+		global $wpdb;
+
+		if ( is_object( $level_ids ) ) {
+			$level_ids = $level_ids->ID;
+		}
+
+		if ( ! is_array( $level_ids ) ) {
+			$level_ids = array( $level_ids );
+		}
+
+		$level_ids = array_values( array_filter( array_map( 'absint', $level_ids ) ) );
+		if ( empty( $level_ids ) ) {
+			return array();
+		}
+
+		// Build a prepared IN() clause and include dynamic post type.
+		$post_type   = tutor()->course_post_type;
+		$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
+		$sql = "
+			SELECT mp.page_id
+			FROM {$wpdb->pmpro_memberships_pages} mp
+			LEFT JOIN {$wpdb->posts} p ON mp.page_id = p.ID
+			WHERE mp.membership_id IN ( {$placeholders} )
+			AND p.post_type = %s
+			AND p.post_status = 'publish'
+			GROUP BY mp.page_id
+		";
+		$params = array_merge( array( $sql ), $level_ids, array( $post_type ) );
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
+		$course_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+		$course_ids = is_array( $course_ids ) ? array_map( 'intval', $course_ids ) : array();
+
+		return $course_ids;
+	}
+
+	/**
+	 * Enroll user immediately after successful PMPro checkout.
+	 *
+	 * @param int             $user_id User ID.
+	 * @param \MemberOrder|null $morder  Order object (may be null in some flows).
+	 * @return void
+	 */
+	public function pmpro_after_checkout_enroll( $user_id, $morder ) {
+		if ( ! function_exists( 'tutor_utils' ) ) {
+			return;
+		}
+
+		// Build a set of relevant level IDs: current active levels plus the order's level id.
+		$current_levels    = pmpro_getMembershipLevelsForUser( $user_id );
+		$current_level_ids = ! empty( $current_levels ) ? wp_list_pluck( $current_levels, 'ID' ) : array();
+		$order_level_id    = ( is_object( $morder ) && ! empty( $morder->membership_id ) ) ? (int) $morder->membership_id : 0;
+		$level_ids         = $current_level_ids;
+		if ( $order_level_id && ! in_array( $order_level_id, $level_ids, true ) ) {
+			$level_ids[] = $order_level_id;
+		}
+
+		if ( empty( $level_ids ) ) {
+			return;
+		}
+
+		$courses = $this->get_courses_for_levels( $level_ids );
+		// Filter out public/free courses
+		$courses = array_values( array_filter( $courses, function ( $cid ) {
+			return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' && get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
+		} ) );
+
+		foreach ( $courses as $course_id ) {
+			if ( ! tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
+				$enrolled_id = tutor_utils()->do_enroll( $course_id, 0, $user_id );
+				if ( $enrolled_id ) {
+					// Mark as completed so UI shows Start/Continue Learning.
+					tutor_utils()->course_enrol_status_change( $enrolled_id, 'completed' );
+				}
+			}
+		}
+	}
+
+	/**
+	 * Handle immediate enrollment sync when a single membership level changes.
+	 * This fires immediately when levels are changed (e.g., admin assignment).
+	 *
+	 * @param int $level_id ID of the level changed to (0 if cancelled).
+	 * @param int $user_id ID of the user changed.
+	 * @param int $cancel_level ID of the level being cancelled if specified.
+	 * @return void
+	 */
+	public function pmpro_after_change_membership_level( $level_id, $user_id, $cancel_level ) {
+		if ( ! function_exists( 'tutor_utils' ) ) {
+			return;
+		}
+
+		// Get current levels for the user
+		$current_levels = pmpro_getMembershipLevelsForUser( $user_id );
+		$current_level_ids = ! empty( $current_levels ) ? wp_list_pluck( $current_levels, 'ID' ) : array();
+
+		// Get courses for current levels
+		$current_courses = $this->get_courses_for_levels( $current_level_ids );
+
+		// Filter out public/free courses
+		$current_courses = array_values( array_filter( $current_courses, function ( $cid ) {
+			return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' && get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
+		} ) );
+
+		// If level was cancelled (level_id = 0), unenroll from courses that required the cancelled level
+		if ( $level_id == 0 && $cancel_level ) {
+			$cancelled_courses = $this->get_courses_for_levels( array( $cancel_level ) );
+			$cancelled_courses = array_values( array_filter( $cancelled_courses, function ( $cid ) {
+				return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' && get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
+			} ) );
+
+			// Only unenroll if user no longer has access via other levels
+			$courses_to_unenroll = array_diff( $cancelled_courses, $current_courses );
+			foreach ( $courses_to_unenroll as $course_id ) {
+				if ( tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
+					tutor_utils()->cancel_course_enrol( $course_id, $user_id );
+				}
+			}
+		}
+
+		// If level was added, enroll in new courses
+		if ( $level_id > 0 ) {
+			$new_courses = $this->get_courses_for_levels( array( $level_id ) );
+			$new_courses = array_values( array_filter( $new_courses, function ( $cid ) {
+				return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' && get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
+			} ) );
+
+			foreach ( $new_courses as $course_id ) {
+				if ( ! tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
+					$enrolled_id = tutor_utils()->do_enroll( $course_id, 0, $user_id );
+					if ( $enrolled_id ) {
+						tutor_utils()->course_enrol_status_change( $enrolled_id, 'completed' );
+					}
+				}
+			}
+		}
+	}
+
+	/**
+	 * When users change PMPro levels, enroll/unenroll them in mapped Tutor courses (non-public only).
+	 * Mirrors logic from PMPro Courses addon for Tutor LMS.
+	 *
+	 * @param array $pmpro_old_user_levels Map of user_id => array of old level objects
+	 * @return void
+	 */
+	public function pmpro_after_all_membership_level_changes( $pmpro_old_user_levels ) {
+		if ( ! function_exists( 'tutor_utils' ) ) {
+			return;
+		}
+
+		foreach ( $pmpro_old_user_levels as $user_id => $old_levels ) {
+			// Current level IDs for user
+			$current_levels = pmpro_getMembershipLevelsForUser( $user_id );
+			$current_level_ids = ! empty( $current_levels ) ? wp_list_pluck( $current_levels, 'ID' ) : array();
+
+			// Old level IDs
+			$old_level_ids = ! empty( $old_levels ) ? wp_list_pluck( $old_levels, 'ID' ) : array();
+
+			$current_courses = $this->get_courses_for_levels( $current_level_ids );
+			$old_courses     = $this->get_courses_for_levels( $old_level_ids );
+
+			// Filter out public/free courses
+			$current_courses = array_values( array_filter( $current_courses, function ( $cid ) {
+				return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' && get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
+			} ) );
+			$old_courses = array_values( array_filter( $old_courses, function ( $cid ) {
+				return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' && get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
+			} ) );
+
+			// Compute diffs
+			$courses_to_unenroll = array_diff( $old_courses, $current_courses );
+			$courses_to_enroll   = array_diff( $current_courses, $old_courses );
+
+			// Unenroll
+			foreach ( $courses_to_unenroll as $course_id ) {
+				if ( tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
+					tutor_utils()->cancel_course_enrol( $course_id, $user_id );
+				}
+			}
+
+			// Enroll
+			foreach ( $courses_to_enroll as $course_id ) {
+				if ( ! tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
+					$enrolled_id = tutor_utils()->do_enroll( $course_id, 0, $user_id );
+					if ( $enrolled_id ) {
+						tutor_utils()->course_enrol_status_change( $enrolled_id, 'completed' );
+					}
+				}
+			}
+		}
+	}
 }
 
 
