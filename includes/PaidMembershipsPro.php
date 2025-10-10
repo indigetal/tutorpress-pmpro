@@ -48,7 +48,11 @@ class PaidMembershipsPro {
         add_action( 'tutor/course/single/content/before/all', array( $this, 'pmpro_pricing_single_course' ), 100, 2 );
         add_filter( 'tutor/options/attr', array( $this, 'add_options' ) );
 
-        if ( tutor_utils()->has_pmpro( true ) ) {
+		if ( tutor_utils()->has_pmpro( true ) ) {
+			// Only wire PMPro behaviors when PMPro is the selected monetization engine (overridable via filter)
+			if ( ! $this->is_pmpro_enabled() ) {
+				return;
+			}
             // Remove price column if PM pro used.
             add_filter( 'manage_' . tutor()->course_post_type . '_posts_columns', array( $this, 'remove_price_column' ), 11, 1 );
 
@@ -845,6 +849,28 @@ class PaidMembershipsPro {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Determine if PMPro integration should be active based on monetization engine.
+	 * Allow override via filter 'tutorpress_pmpro_enabled'.
+	 *
+	 * @return bool
+	 */
+	private function is_pmpro_enabled() {
+		$forced = apply_filters( 'tutorpress_pmpro_enabled', null );
+		if ( is_bool( $forced ) ) {
+			return $forced;
+		}
+		// Prefer centralized helper if available
+		if ( function_exists( 'tutorpress_monetization' ) ) {
+			return (bool) tutorpress_monetization()->is_pmpro();
+		}
+		// Fallback to Tutor option
+		if ( function_exists( 'get_tutor_option' ) ) {
+			return 'pmpro' === get_tutor_option( 'monetize_by' );
+		}
+		return false;
 	}
 
 	/**
