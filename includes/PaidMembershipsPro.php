@@ -62,10 +62,12 @@ class PaidMembershipsPro {
             add_filter( 'tutor_course_expire_validity', array( $this, 'filter_expire_time' ), 99, 2 );
 			add_action( 'pmpro_after_change_membership_level', array( $this, 'remove_course_access' ), 10, 3 );
 
-			// Step 4: keep Tutor enrollment in sync with PMPro membership level changes
+			// Keep Tutor enrollment in sync with PMPro membership level changes
 			add_action( 'pmpro_after_all_membership_level_changes', array( $this, 'pmpro_after_all_membership_level_changes' ) );
 			add_action( 'pmpro_after_change_membership_level', array( $this, 'pmpro_after_change_membership_level' ), 10, 3 );
 			add_action( 'pmpro_after_checkout', array( $this, 'pmpro_after_checkout_enroll' ), 10, 2 );
+			// Unenroll on refunded orders when no other valid level still grants access
+			add_action( 'pmpro_order_status_refunded', array( $this, 'pmpro_order_status_refunded' ), 10, 2 );
         }
     }
 
@@ -804,6 +806,48 @@ class PaidMembershipsPro {
 	}
 
 	/**
+	 * Handle PMPro order refunds → unenroll if the refunded level is the only access path.
+	 *
+	 * @param object $order      PMPro MemberOrder instance
+	 * @param string $old_status Previous status
+	 * @return void
+	 */
+	public function pmpro_order_status_refunded( $order, $old_status ) {
+		if ( ! function_exists( 'tutor_utils' ) || ! is_object( $order ) ) {
+			return;
+		}
+
+		$user_id      = isset( $order->user_id ) ? (int) $order->user_id : 0;
+		$level_id     = isset( $order->membership_id ) ? (int) $order->membership_id : 0;
+		if ( ! $user_id || ! $level_id ) {
+			return;
+		}
+
+		// Courses tied to the refunded level
+		$refunded_courses = $this->get_courses_for_levels( array( $level_id ) );
+
+		// Other active levels for this user (excluding refunded level)
+		$current_levels    = pmpro_getMembershipLevelsForUser( $user_id );
+		$current_level_ids = ! empty( $current_levels ) ? wp_list_pluck( $current_levels, 'ID' ) : array();
+		$other_level_ids   = array_values( array_diff( array_map( 'intval', $current_level_ids ), array( $level_id ) ) );
+		$other_courses     = $this->get_courses_for_levels( $other_level_ids );
+
+		// Skip public/free courses
+		$refunded_courses = array_values( array_filter( $refunded_courses, function ( $cid ) {
+			return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' && get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
+		} ) );
+
+		foreach ( $refunded_courses as $course_id ) {
+			// If no other course access remains, unenroll
+			if ( ! in_array( $course_id, $other_courses, true ) ) {
+				if ( tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
+					tutor_utils()->cancel_course_enrol( $course_id, $user_id );
+				}
+			}
+		}
+	}
+
+	/**
 	 * Enroll user immediately after successful PMPro checkout.
 	 *
 	 * @param int             $user_id User ID.
@@ -840,6 +884,18 @@ class PaidMembershipsPro {
 				if ( $enrolled_id ) {
 					// Mark as completed so UI shows Start/Continue Learning.
 					tutor_utils()->course_enrol_status_change( $enrolled_id, 'completed' );
+					// Link enrollment to PMPro order for traceability (mirrors Woo/EDD linkage in Tutor).
+					if ( is_object( $morder ) ) {
+						if ( isset( $morder->id ) && $morder->id ) {
+							update_post_meta( $enrolled_id, '_tutor_enrolled_by_order_id', (int) $morder->id );
+						}
+						if ( isset( $morder->code ) && $morder->code ) {
+							update_post_meta( $enrolled_id, '_tutor_pmpro_order_code', sanitize_text_field( $morder->code ) );
+						}
+						if ( isset( $morder->membership_id ) && $morder->membership_id ) {
+							update_post_meta( $enrolled_id, '_tutor_pmpro_level_id', (int) $morder->membership_id );
+						}
+					}
 				}
 			}
 		}
