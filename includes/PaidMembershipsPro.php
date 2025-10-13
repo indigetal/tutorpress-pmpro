@@ -37,6 +37,8 @@ class PaidMembershipsPro {
 	 * Register hooks
 	 */
     public function __construct() {
+        // Register frontend pricing hooks late in page lifecycle
+        add_action( 'wp', array( $this, 'init_pmpro_price_overrides' ), 20 );
         add_action( 'pmpro_membership_level_after_other_settings', array( $this, 'display_courses_categories' ) );
         add_action( 'pmpro_save_membership_level', array( $this, 'pmpro_settings' ) );
         add_filter( 'tutor_course/single/add-to-cart', array( $this, 'tutor_course_add_to_cart' ) );
@@ -74,6 +76,200 @@ class PaidMembershipsPro {
 			add_action( 'pmpro_order_status_refunded', array( $this, 'pmpro_order_status_refunded' ), 10, 2 );
         }
     }
+
+    /**
+     * Initialize pricing-related filters for archive, dashboard, and single contexts (Step B).
+     *
+     * - Inject minimal PMPro price strings via get_tutor_course_price (priority 12)
+     * - Ensure Tutor loop uses the 'tutor' price template wrappers so price markup renders
+     *
+     * @return void
+     */
+    public function init_pmpro_price_overrides() {
+        // Guard: only run on frontend, not admin
+        if ( is_admin() ) {
+            return;
+        }
+
+        // Guard: PMPro must be active and selected as monetization engine
+        if ( ! function_exists( 'pmpro_getAllLevels' ) ) {
+            return;
+        }
+
+        if ( ! $this->is_pmpro_enabled() ) {
+            return;
+        }
+
+        // Price string injection for archive/dashboard/single contexts
+        add_filter( 'get_tutor_course_price', array( $this, 'filter_get_tutor_course_price' ), 12, 2 );
+
+        // Directly override loop price block for archive/dashboard contexts (revised Step B)
+        add_filter( 'tutor_course_loop_price', array( $this, 'filter_course_loop_price_pmpro' ), 12, 2 );
+
+        // Ensure loop uses Tutor monetization wrappers so our string renders inside native markup
+        add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
+
+        // (Cleanup) Removed fallback injections and debug probes now that pricing renders reliably.
+
+    }
+
+    /**
+     * Return PMPro minimal price string when available.
+     * Falls back to original price if engine/levels are not applicable.
+     *
+     * @param mixed $price
+     * @param int   $course_id
+     * @return mixed
+     */
+    public function filter_get_tutor_course_price( $price, $course_id = 0 ) {
+        $course_id = $course_id ? (int) $course_id : (int) get_the_ID();
+        if ( ! $course_id ) {
+            return $price;
+        }
+        if ( ! $this->is_pmpro_enabled() ) {
+            return $price;
+        }
+
+        if ( class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Pricing' ) ) {
+            $pmpro_price = \TUTORPRESS_PMPRO\PMPro_Pricing::get_formatted_price( $course_id );
+            if ( is_string( $pmpro_price ) && $pmpro_price !== '' ) {
+                return $pmpro_price;
+            }
+        }
+
+        return $price;
+    }
+
+    /**
+     * Ensure Tutor uses the 'tutor' price template wrappers in loops
+     * when the course has PMPro levels so our price string displays.
+     *
+     * @param string|null $sell_by
+     * @return string|null
+     */
+    public function filter_course_sell_by( $sell_by ) {
+        if ( ! $this->is_pmpro_enabled() ) {
+            return $sell_by;
+        }
+        // For PMPro engine, use Tutor monetization wrappers in loops so
+        // get_tutor_course_price can render the PMPro price string.
+        // This keeps markup consistent regardless of mapping state.
+        return 'tutor';
+    }
+
+    /**
+     * Replace the loop price block with PMPro minimal pricing when applicable.
+     *
+     * @param string $html
+     * @param int    $course_id
+     * @return string
+     */
+    public function filter_course_loop_price_pmpro( $html, $course_id ) {
+        if ( ! $this->is_pmpro_enabled() ) {
+            return $html;
+        }
+
+        $course_id = (int) $course_id ?: (int) get_the_ID();
+        if ( ! $course_id ) {
+            return $html;
+        }
+
+        // Respect public/free courses
+        if ( get_post_meta( $course_id, '_tutor_is_public_course', true ) === 'yes' ) {
+            return $html;
+        }
+        if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
+            return $html;
+        }
+
+        // Must have PMPro level associations
+        global $wpdb;
+        $has_levels = false;
+        if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+            $has_levels = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) ) > 0;
+        }
+        if ( ! $has_levels ) {
+            return $html;
+        }
+
+        // Resolve minimal price string
+        $price = class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Pricing' ) ? \TUTORPRESS_PMPRO\PMPro_Pricing::get_formatted_price( $course_id ) : '';
+
+        // Fallback: derive price from mapped level data if resolver returned empty
+        if ( ! is_string( $price ) || $price === '' ) {
+            $amount_strings = array();
+            $numeric_amounts = array();
+            // Currency helpers
+            $cur = $this->get_pmpro_currency();
+            $symbol = isset( $cur['currency_symbol'] ) ? $cur['currency_symbol'] : '';
+            $pos    = isset( $cur['currency_position'] ) ? $cur['currency_position'] : 'left';
+            $fmt = function( $amt ) use ( $symbol, $pos ) {
+                $amt = number_format_i18n( (float) $amt, 2 );
+                if ( $symbol ) {
+                    if ( 'left_space' === $pos ) return $symbol . ' ' . $amt;
+                    if ( 'right' === $pos )      return $amt . $symbol;
+                    if ( 'right_space' === $pos )return $amt . ' ' . $symbol;
+                }
+                return $symbol . $amt;
+            };
+            $per_label = function( $p ) {
+                $p = strtolower( (string) $p );
+                if ( $p === 'day' ) return __( 'day', 'tutorpress-pmpro' );
+                if ( $p === 'week' ) return __( 'week', 'tutorpress-pmpro' );
+                if ( $p === 'month' ) return __( 'month', 'tutorpress-pmpro' );
+                if ( $p === 'year' ) return __( 'year', 'tutorpress-pmpro' );
+                return $p;
+            };
+
+            $level_ids = isset( $wpdb->pmpro_memberships_pages ) ? $wpdb->get_col( $wpdb->prepare( "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) ) : array();
+            if ( is_array( $level_ids ) ) {
+                foreach ( $level_ids as $lid ) {
+                    $level = function_exists( 'pmpro_getLevel' ) ? pmpro_getLevel( (int) $lid ) : null;
+                    if ( ! $level ) continue;
+                    $init  = isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0;
+                    $bill  = isset( $level->billing_amount ) ? (float) $level->billing_amount : 0.0;
+                    $cycle = isset( $level->cycle_number ) ? (int) $level->cycle_number : 0;
+                    $per   = isset( $level->cycle_period ) ? strtolower( (string) $level->cycle_period ) : '';
+
+                    if ( $bill > 0 && $cycle > 0 && $per ) {
+                        $amount_strings[] = sprintf( '%s %s/%s', $fmt( $bill ), __( 'per', 'tutorpress-pmpro' ), $per_label( $per ) );
+                        $numeric_amounts[] = $bill;
+                    } elseif ( $init > 0 ) {
+                        $amount_strings[] = sprintf( '%s %s', $fmt( $init ), __( 'one-time', 'tutorpress-pmpro' ) );
+                        $numeric_amounts[] = $init;
+                    }
+                }
+            }
+            if ( ! empty( $amount_strings ) ) {
+                if ( count( $amount_strings ) === 1 ) {
+                    $price = $amount_strings[0];
+                } else {
+                    $min = min( $numeric_amounts );
+                    $price = sprintf( '%s %s', __( 'Starts from', 'tutorpress-pmpro' ), $fmt( $min ) );
+                }
+            }
+        }
+
+        if ( ! is_string( $price ) || $price === '' ) {
+            return $html;
+        }
+
+        ob_start();
+        ?>
+        <div class="tutor-d-flex tutor-align-center tutor-justify-between">
+            <div class="list-item-price tutor-d-flex tutor-align-center">
+                <span class="price tutor-fs-6 tutor-fw-bold tutor-color-black"><?php echo esc_html( $price ); ?></span>
+            </div>
+            <div class="list-item-button">
+                <a href="<?php echo esc_url( get_the_permalink( $course_id ) ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block"><?php esc_html_e( 'View Details', 'tutorpress-pmpro' ); ?></a>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+
+
 
     /**
     * On PM Pro subscription expired, remove course access
@@ -857,21 +1053,25 @@ class PaidMembershipsPro {
 	 *
 	 * @return bool
 	 */
-	private function is_pmpro_enabled() {
-		$forced = apply_filters( 'tutorpress_pmpro_enabled', null );
-		if ( is_bool( $forced ) ) {
-			return $forced;
-		}
-		// Prefer centralized helper if available
-		if ( function_exists( 'tutorpress_monetization' ) ) {
-			return (bool) tutorpress_monetization()->is_pmpro();
-		}
-		// Fallback to Tutor option
-		if ( function_exists( 'get_tutor_option' ) ) {
-			return 'pmpro' === get_tutor_option( 'monetize_by' );
-		}
-		return false;
-	}
+    private function is_pmpro_enabled() {
+        $forced = apply_filters( 'tutorpress_pmpro_enabled', null );
+        if ( is_bool( $forced ) ) {
+            return $forced;
+        }
+        // Check Tutor option directly first (most reliable on frontend)
+        if ( function_exists( 'get_tutor_option' ) ) {
+            if ( 'pmpro' === get_tutor_option( 'monetize_by' ) ) {
+                return true;
+            }
+        }
+        // Then consult centralized helper if available
+        if ( function_exists( 'tutorpress_monetization' ) ) {
+            if ( tutorpress_monetization()->is_pmpro() ) {
+                return true;
+            }
+        }
+        return false;
+    }
 
 	/**
 	 * Enroll user immediately after successful PMPro checkout.
