@@ -97,6 +97,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Auto-create one-time PMPro levels when selling_option is set to one_time
 		add_action( 'rest_after_insert_courses', array( $this, 'auto_create_one_time_level_for_course' ), 10, 3 );
 		add_action( 'rest_after_insert_course-bundle', array( $this, 'auto_create_one_time_level_for_bundle' ), 10, 3 );
+
+		// Reconcile hooks (scaffolding): REST, classic save, status transition, and scheduled action
+		add_action( 'rest_after_insert_courses', array( $this, 'reconcile_course_levels_rest' ), 20, 3 );
+		add_action( 'save_post_courses', array( $this, 'schedule_reconcile_course_levels' ), 999, 3 );
+		add_action( 'transition_post_status', array( $this, 'maybe_reconcile_on_status' ), 20, 3 );
+		add_action( 'tp_pmpro_reconcile_course', array( $this, 'reconcile_course_levels' ), 10, 1 );
+
+		// On permanent delete of a course/bundle, remove associated PMPro levels
+		add_action( 'before_delete_post', array( $this, 'delete_course_levels_on_delete' ), 10, 1 );
 	}
 
 	public function notice_tutor_missing() {
@@ -582,6 +591,205 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * REST entrypoint for course-level reconcile (scaffold w/ logs).
+	 *
+	 * @param WP_Post         $post
+	 * @param WP_REST_Request $request
+	 * @param bool            $creating
+	 * @return void
+	 */
+	public function reconcile_course_levels_rest( $post, $request, $creating ) {
+		$course_id = is_object( $post ) ? (int) $post->ID : (int) $post;
+		$error_prefix = '[TP-PMPRO] reconcile_course_levels_rest';
+		// Guard: only proceed for published courses
+		if ( 'publish' !== get_post_status( $course_id ) ) {
+			error_log( $error_prefix . ' skipped (not published); course=' . $course_id );
+			return;
+		}
+		$so_keys = array( 'selling_option', '_tutor_course_selling_option' );
+		$pt_keys = array( 'price_type', 'tutor_course_price_type', '_tutor_course_price_type' );
+		$price_keys = array( 'price', 'tutor_course_price' );
+		$so = null; $pt = null; $price = null;
+		if ( method_exists( $request, 'get_param' ) ) {
+			foreach ( $so_keys as $k ) { if ( null === $so ) { $so = $request->get_param( $k ); } }
+			foreach ( $pt_keys as $k ) { if ( null === $pt ) { $pt = $request->get_param( $k ); } }
+			foreach ( $price_keys as $k ) { if ( null === $price ) { $price = $request->get_param( $k ); } }
+		}
+		error_log( $error_prefix . ' fired; course=' . $course_id . ' creating=' . ( $creating ? '1' : '0' ) . ' selling_option=' . ( $so ? $so : 'n/a' ) . ' price_type=' . ( $pt ? $pt : 'n/a' ) . ' price=' . ( null !== $price ? $price : 'n/a' ) );
+
+		// Schedule reconcile shortly after REST save to ensure all meta is persisted
+		if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( $course_id ) ) ) {
+			wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( $course_id ) );
+			error_log( $error_prefix . ' scheduled reconcile in 1s; course=' . $course_id );
+		}
+	}
+
+	/**
+	 * Classic save entrypoint schedules reconcile (scaffold w/ logs).
+	 *
+	 * @param int     $post_id
+	 * @param WP_Post $post
+	 * @param bool    $update
+	 * @return void
+	 */
+	public function schedule_reconcile_course_levels( $post_id, $post, $update ) {
+		if ( 'courses' !== get_post_type( $post_id ) ) {
+			return;
+		}
+		// Guard: only schedule reconcile for published courses
+		if ( 'publish' !== get_post_status( $post_id ) ) {
+			error_log( '[TP-PMPRO] schedule_reconcile_course_levels skipped (not published); course=' . (int) $post_id );
+			return;
+		}
+		error_log( '[TP-PMPRO] schedule_reconcile_course_levels fired; course=' . (int) $post_id . ' update=' . ( $update ? '1' : '0' ) );
+		if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( (int) $post_id ) ) ) {
+			wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( (int) $post_id ) );
+			error_log( '[TP-PMPRO] scheduled reconcile in 1s; course=' . (int) $post_id );
+		}
+	}
+
+	/**
+	 * Status transition entrypoint (scaffold w/ logs).
+	 *
+	 * @param string  $new_status
+	 * @param string  $old_status
+	 * @param WP_Post $post
+	 * @return void
+	 */
+	public function maybe_reconcile_on_status( $new_status, $old_status, $post ) {
+		if ( ! $post || 'courses' !== get_post_type( $post ) ) {
+			return;
+		}
+		if ( 'publish' === $new_status && 'publish' !== $old_status ) {
+			error_log( '[TP-PMPRO] maybe_reconcile_on_status fired; course=' . (int) $post->ID . ' new=publish old=' . $old_status );
+			if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( (int) $post->ID ) ) ) {
+				wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( (int) $post->ID ) );
+				error_log( '[TP-PMPRO] maybe_reconcile_on_status scheduled reconcile in 1s; course=' . (int) $post->ID );
+			}
+		}
+	}
+
+	/**
+	 * Scheduled reconcile handler (scaffold w/ logs).
+	 *
+	 * @param int   $course_id
+	 * @param array $ctx Optional context
+	 * @return void
+	 */
+	public function reconcile_course_levels( $course_id, $ctx = array() ) {
+		$course_id = (int) $course_id;
+		// Guard: only reconcile for published courses
+		if ( 'publish' !== get_post_status( $course_id ) ) {
+			error_log( '[TP-PMPRO] reconcile_course_levels skipped (not published); course=' . $course_id );
+			return;
+		}
+		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
+		error_log( '[TP-PMPRO] reconcile_course_levels fired; course=' . $course_id . ' source=' . $src );
+
+		// Consume any pending plans saved while in draft
+		$pending = get_post_meta( $course_id, '_tutorpress_pmpro_pending_plans', true );
+		if ( is_array( $pending ) && ! empty( $pending ) ) {
+			error_log( '[TP-PMPRO] reconcile_course_levels pending_count=' . count( $pending ) . ' course=' . $course_id );
+			foreach ( $pending as $plan_params ) {
+				try {
+					// Map to PMPro level data and create level now that we're published
+					require_once $this->path . 'includes/class-pmpro-mapper.php';
+					$mapper = new \TutorPress_PMPro_Mapper();
+					$level_data = $mapper->map_ui_to_pmpro( (array) $plan_params );
+					$db_data = $level_data;
+					if ( isset( $db_data['meta'] ) ) { unset( $db_data['meta'] ); }
+					// Normalize recurring vs one_time if provided
+					if ( isset( $level_data['payment_type'] ) && 'one_time' === $level_data['payment_type'] ) {
+						$db_data['billing_amount'] = 0; $db_data['cycle_number'] = 0; $db_data['cycle_period'] = ''; $db_data['billing_limit'] = 0;
+					}
+					global $wpdb;
+					$wpdb->insert( $wpdb->pmpro_membership_levels, $db_data );
+					$level_id = (int) $wpdb->insert_id;
+					if ( $level_id > 0 ) {
+						// Ensure association and reverse meta
+						if ( class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
+							\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
+						}
+						if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+							update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
+						}
+						// Update course meta list
+						$existing = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+						if ( ! is_array( $existing ) ) { $existing = array(); }
+						$existing[] = $level_id;
+						update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_unique( array_map( 'intval', $existing ) ) ) );
+						error_log( '[TP-PMPRO] reconcile_course_levels created_level_id=' . $level_id . ' course=' . $course_id );
+					}
+				} catch ( \Exception $e ) {
+					// swallow and continue; logs can be added if needed
+				}
+			}
+			// Clear pending
+			delete_post_meta( $course_id, '_tutorpress_pmpro_pending_plans' );
+		}
+	}
+
+	/**
+	 * Permanently delete PMPro levels associated with a course/bundle when the post is deleted.
+	 *
+	 * - Does NOT run for unpublish/trash; only for permanent delete.
+	 * - Deletes levels that are owned by the course (level meta tutorpress_course_id matches),
+	 *   or levels whose association count is 1 (only mapped to this course).
+	 * - Otherwise, only removes the course-level association and prunes course meta.
+	 *
+	 * @param int $post_id
+	 * @return void
+	 */
+	public function delete_course_levels_on_delete( $post_id ) {
+		$post_id = (int) $post_id;
+		$post_type = get_post_type( $post_id );
+		if ( ! in_array( $post_type, array( 'courses', 'course-bundle' ), true ) ) {
+			return;
+		}
+
+		global $wpdb;
+		$level_ids = array();
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$level_ids = $wpdb->get_col( $wpdb->prepare( "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $post_id ) );
+		}
+		$meta_ids = get_post_meta( $post_id, '_tutorpress_pmpro_levels', true );
+		if ( is_array( $meta_ids ) ) {
+			$level_ids = array_merge( $level_ids, $meta_ids );
+		}
+		$level_ids = array_values( array_unique( array_map( 'intval', (array) $level_ids ) ) );
+		if ( empty( $level_ids ) ) {
+			return;
+		}
+
+		// Ensure cleanup class is available
+		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+		}
+
+		foreach ( $level_ids as $lid ) {
+			$owned_by_course = false;
+			if ( function_exists( 'get_pmpro_membership_level_meta' ) ) {
+				$owner = (int) get_pmpro_membership_level_meta( $lid, 'tutorpress_course_id', true );
+				$owned_by_course = ( $owner === $post_id );
+			}
+
+			$assoc_count = 0;
+			if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+				$assoc_count = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $lid ) );
+			}
+
+			if ( $owned_by_course || $assoc_count <= 1 ) {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( $lid, true );
+			} else {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::remove_course_level_mapping( $post_id, $lid );
+			}
+		}
+
+		// Clear course meta after cleanup
+		delete_post_meta( $post_id, '_tutorpress_pmpro_levels' );
+	}
+
+	/**
 	 * Auto-create a one-time PMPro level when selling_option is one_time.
 	 *
 	 * @param int    $object_id   The course or bundle ID.
@@ -593,6 +801,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$post_type = get_post_type( $object_id );
 		$valid_post_types = array( 'courses', 'course-bundle' );
 		if ( ! in_array( $post_type, $valid_post_types ) ) {
+			return;
+		}
+
+		// Only create/delete levels for published content. Drafts should not create PMPro levels yet.
+		$post = get_post( $object_id );
+		if ( ! $post || 'publish' !== $post->post_status ) {
 			return;
 		}
 

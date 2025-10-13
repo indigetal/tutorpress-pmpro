@@ -268,6 +268,20 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 
+		// If course is not published, also include any pending (queued) plans stored in meta
+		$status = get_post_status( (int) $course_id );
+		if ( 'publish' !== $status ) {
+			$pending = get_post_meta( $course_id, '_tutorpress_pmpro_pending_plans', true );
+			if ( is_array( $pending ) && ! empty( $pending ) ) {
+				$mapper = isset( $mapper ) ? $mapper : new \TutorPress_PMPro_Mapper();
+				foreach ( $pending as $pp ) {
+					$ui = $mapper->map_pmpro_to_ui( (object) array_merge( array( 'id' => 0 ), $mapper->map_ui_to_pmpro( (array) $pp ) ) );
+					if ( is_array( $ui ) ) { $ui['queued'] = true; $ui['status'] = 'pending_publish'; }
+					$plans[] = $ui;
+				}
+			}
+		}
+
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $plans, __( 'PMPro membership levels retrieved.', 'tutorpress-pmpro' ) ) );
 	}
 
@@ -349,6 +363,27 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		$validation = TutorPress_Subscription_Utils::validate_course_id( $object_id );
 		if ( is_wp_error( $validation ) ) {
 			return $validation;
+		}
+
+		// Publish guard: do not create PMPro levels for drafts/unpublished content
+		$status = get_post_status( (int) $object_id );
+		if ( 'publish' !== $status ) {
+			// Persist pending plan for later creation on publish
+			$pending_key = '_tutorpress_pmpro_pending_plans';
+			$pending = get_post_meta( (int) $object_id, $pending_key, true );
+			if ( ! is_array( $pending ) ) { $pending = array(); }
+			$incoming = $request->get_params();
+			$incoming['__ts'] = current_time( 'timestamp' );
+			$pending[] = $incoming;
+			update_post_meta( (int) $object_id, $pending_key, $pending );
+
+			// Build a UI-shaped payload so the editor can continue without crashing
+			$mapper = new \TutorPress_PMPro_Mapper();
+			$level_data = $mapper->map_ui_to_pmpro( $request->get_params() );
+			$queued_level = (object) array_merge( array( 'id' => 0 ), $level_data );
+			$payload = $mapper->map_pmpro_to_ui( $queued_level );
+			if ( is_array( $payload ) ) { $payload['queued'] = true; $payload['status'] = 'pending_publish'; }
+			return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'Plan queued: course is not published. Levels will be created on publish.', 'tutorpress-pmpro' ) ) );
 		}
 
 		if ( ! function_exists( 'pmpro_insert_or_replace' ) && ! class_exists( 'PMPro_Membership_Level' ) ) {
@@ -480,6 +515,21 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		$level = pmpro_getLevel( $plan_id );
 		if ( ! $level ) {
 			return new WP_Error( 'level_not_found', __( 'PMPro level not found.', 'tutorpress-pmpro' ), [ 'status' => 404 ] );
+		}
+
+		// Publish guard: if an object_id/course_id is provided and not published, skip PMPro updates
+		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
+		if ( $object_id ) {
+			$status = get_post_status( (int) $object_id );
+			if ( 'publish' !== $status ) {
+				// Return a UI-shaped payload to keep editor stable, marked as queued
+				$mapper = new \TutorPress_PMPro_Mapper();
+				$incoming = $mapper->map_ui_to_pmpro( $request->get_params() );
+				$queued_level = (object) array_merge( (array) $level, $incoming );
+				$payload = $mapper->map_pmpro_to_ui( $queued_level );
+				if ( is_array( $payload ) ) { $payload['queued'] = true; $payload['status'] = 'pending_publish'; }
+				return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'Plan update queued: course is not published. Updates will apply on publish.', 'tutorpress-pmpro' ) ) );
+			}
 		}
 
 		// Prepare update fields
