@@ -591,7 +591,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
-	 * REST entrypoint for course-level reconcile (scaffold w/ logs).
+	 * REST entrypoint for course-level reconcile (with context extraction).
 	 *
 	 * @param WP_Post         $post
 	 * @param WP_REST_Request $request
@@ -606,6 +606,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 			error_log( $error_prefix . ' skipped (not published); course=' . $course_id );
 			return;
 		}
+
+		// Extract context from REST request
 		$so_keys = array( 'selling_option', '_tutor_course_selling_option' );
 		$pt_keys = array( 'price_type', 'tutor_course_price_type', '_tutor_course_price_type' );
 		$price_keys = array( 'price', 'tutor_course_price' );
@@ -615,7 +617,19 @@ if ( ! defined( 'ABSPATH' ) ) {
 			foreach ( $pt_keys as $k ) { if ( null === $pt ) { $pt = $request->get_param( $k ); } }
 			foreach ( $price_keys as $k ) { if ( null === $price ) { $price = $request->get_param( $k ); } }
 		}
-		error_log( $error_prefix . ' fired; course=' . $course_id . ' creating=' . ( $creating ? '1' : '0' ) . ' selling_option=' . ( $so ? $so : 'n/a' ) . ' price_type=' . ( $pt ? $pt : 'n/a' ) . ' price=' . ( null !== $price ? $price : 'n/a' ) );
+		
+		// Fallback to post meta if not in request
+		if ( null === $so ) {
+			$so = get_post_meta( $course_id, '_tutor_course_selling_option', true );
+		}
+		if ( null === $pt ) {
+			$pt = get_post_meta( $course_id, '_tutor_course_price_type', true );
+		}
+		if ( null === $price ) {
+			$price = get_post_meta( $course_id, 'tutor_course_price', true );
+		}
+
+		error_log( $error_prefix . ' context extracted; course=' . $course_id . ' creating=' . ( $creating ? '1' : '0' ) . ' selling_option=' . ( $so ? $so : 'n/a' ) . ' price_type=' . ( $pt ? $pt : 'n/a' ) . ' price=' . ( null !== $price ? $price : 'n/a' ) );
 
 		// Schedule reconcile shortly after REST save to ensure all meta is persisted
 		if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( $course_id ) ) ) {
@@ -670,6 +684,104 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * Get reliable PMPro state for a course.
+	 *
+	 * - Discovers associations from pmpro_memberships_pages (source of truth)
+	 * - Verifies each level exists in pmpro_membership_levels
+	 * - Classifies levels as one_time or recurring
+	 * - Prunes stale associations and rewrites _tutorpress_pmpro_levels meta
+	 *
+	 * @param int   $course_id
+	 * @param array $ctx Optional context for logging
+	 * @return array {
+	 *     @type array $valid_ids All valid level IDs associated with this course
+	 *     @type array $one_time_ids Level IDs classified as one-time
+	 *     @type array $recurring_ids Level IDs classified as recurring
+	 * }
+	 */
+	private function get_course_pmpro_state( $course_id, $ctx = array() ) {
+		global $wpdb;
+		$course_id = (int) $course_id;
+		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'unknown';
+
+		// Discover associations from pmpro_memberships_pages (primary source of truth)
+		$associated_ids = array();
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$associated_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
+				$course_id
+			) );
+		}
+		$associated_ids = array_map( 'intval', (array) $associated_ids );
+
+		// Also read _tutorpress_pmpro_levels meta (secondary source)
+		$meta_ids = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+		if ( ! is_array( $meta_ids ) ) {
+			$meta_ids = array();
+		}
+		$meta_ids = array_map( 'intval', $meta_ids );
+
+		// Union of both sources
+		$candidate_ids = array_values( array_unique( array_merge( $associated_ids, $meta_ids ) ) );
+
+		// Verify each candidate level exists in pmpro_membership_levels and classify
+		$valid_ids = array();
+		$one_time_ids = array();
+		$recurring_ids = array();
+		$stale_ids = array();
+
+		foreach ( $candidate_ids as $lid ) {
+			if ( ! $lid ) {
+				continue;
+			}
+			$row = $wpdb->get_row( $wpdb->prepare(
+				"SELECT id, billing_amount, cycle_number FROM {$wpdb->pmpro_membership_levels} WHERE id = %d",
+				$lid
+			), ARRAY_A );
+
+			if ( ! $row || ! isset( $row['id'] ) ) {
+				// Level doesn't exist in PMPro DB → stale
+				$stale_ids[] = $lid;
+				continue;
+			}
+
+			$valid_ids[] = (int) $row['id'];
+			$billing = isset( $row['billing_amount'] ) ? (float) $row['billing_amount'] : 0.0;
+			$cycle = isset( $row['cycle_number'] ) ? (int) $row['cycle_number'] : 0;
+			$is_one_time = ( $billing <= 0 && $cycle === 0 );
+
+			if ( $is_one_time ) {
+				$one_time_ids[] = (int) $row['id'];
+			} else {
+				$recurring_ids[] = (int) $row['id'];
+			}
+		}
+
+		// Prune stale associations and rewrite meta
+		if ( ! empty( $stale_ids ) ) {
+			// Ensure cleanup class is available
+			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+			}
+			foreach ( $stale_ids as $sid ) {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::remove_course_level_mapping( $course_id, $sid );
+			}
+			error_log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_count=' . count( $stale_ids ) . ' course=' . $course_id . ' source=' . $src );
+		}
+
+		// Rewrite _tutorpress_pmpro_levels to match verified valid_ids
+		update_post_meta( $course_id, '_tutorpress_pmpro_levels', $valid_ids );
+
+		error_log( '[TP-PMPRO] get_course_pmpro_state discovered; course=' . $course_id . ' valid=' . count( $valid_ids ) . ' one_time=' . count( $one_time_ids ) . ' recurring=' . count( $recurring_ids ) . ' stale=' . count( $stale_ids ) . ' source=' . $src );
+
+		return array(
+			'valid_ids'     => $valid_ids,
+			'one_time_ids'  => $one_time_ids,
+			'recurring_ids' => $recurring_ids,
+		);
+	}
+
+	/**
 	 * Scheduled reconcile handler (scaffold w/ logs).
 	 *
 	 * @param int   $course_id
@@ -706,27 +818,41 @@ if ( ! defined( 'ABSPATH' ) ) {
 					$wpdb->insert( $wpdb->pmpro_membership_levels, $db_data );
 					$level_id = (int) $wpdb->insert_id;
 					if ( $level_id > 0 ) {
-						// Ensure association and reverse meta
-						if ( class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
-							\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
-						}
+						// ✅ KEY INSIGHT: Always set reverse ownership meta
 						if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 							update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
+							update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
 						}
+						// ✅ KEY INSIGHT: Always ensure association row exists
+						if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
+							require_once $this->path . 'includes/class-pmpro-association.php';
+						}
+						\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
+						
 						// Update course meta list
 						$existing = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
 						if ( ! is_array( $existing ) ) { $existing = array(); }
 						$existing[] = $level_id;
 						update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_unique( array_map( 'intval', $existing ) ) ) );
-						error_log( '[TP-PMPRO] reconcile_course_levels created_level_id=' . $level_id . ' course=' . $course_id );
+						error_log( '[TP-PMPRO] reconcile_course_levels created_level_id=' . $level_id . ' owner=' . $course_id . ' assoc=ensured course=' . $course_id );
 					}
 				} catch ( \Exception $e ) {
-					// swallow and continue; logs can be added if needed
+					error_log( '[TP-PMPRO] reconcile_course_levels error creating pending plan: ' . $e->getMessage() . ' course=' . $course_id );
 				}
 			}
 			// Clear pending
 			delete_post_meta( $course_id, '_tutorpress_pmpro_pending_plans' );
 		}
+
+		// Step 2: Association discovery and context extraction
+		$state = $this->get_course_pmpro_state( $course_id, array( 'source' => $src ) );
+		
+		// Read course pricing context from post meta
+		$selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
+		$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
+		$price = get_post_meta( $course_id, 'tutor_course_price', true );
+		
+		error_log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
 	}
 
 	/**

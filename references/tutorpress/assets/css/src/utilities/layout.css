@@ -1,0 +1,584 @@
+/**
+ * Layout Utilities
+ * Reusable layout patterns and utilities for TutorPress components
+ * 
+ * Naming Convention: tpress-{pattern-name}
+ * Groups: button-groups, flex-alignment, header-actions, positioning
+ */
+
+/* ========================================================================
+   BUTTON GROUP UTILITIES
+   ======================================================================== */
+
+/* 
+ * Base button group pattern - standard spacing
+ * 
+ * USE WHEN: You have multiple buttons that need consistent horizontal spacing
+ * STRUCTURE: <div class="tpress-button-group"><button>A</button><button>B</button></div>
+ * 
+ * EXAMPLE: Content action buttons, form button groups, toolbar buttons
+ * CURRENT USE: TopicSection.tsx for content buttons, LiveLessonModal.tsx for modal actions
+ */
+.tpress-button-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* 
+ * Tight spacing variant for compact layouts
+ * 
+ * USE WHEN: You need buttons closer together for space-constrained areas
+ * CURRENT USE: TopicSection.tsx for topic actions, responsive mobile layouts
+ */
+.tpress-button-group-xs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+/* 
+ * Loose spacing variant for prominent button groups
+ * 
+ * USE WHEN: You want more visual separation between important actions
+ * CURRENT USE: TopicSection.tsx for main content buttons
+ */
+.tpress-button-group-md {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+/* 
+ * Justification variants - combine with base button-group classes
+ * USAGE: class="tpress-button-group tpress-button-group-end"
+ */
+
+.tpress-button-group-start {
+  justify-content: flex-start;
+}
+
+.tpress-button-group-end {
+  justify-content: flex-end;
+}
+
+.tpress-button-group-center {
+  justify-content: center;
+}
+
+.tpress-button-group-between {
+  justify-content: space-between;
+}
+
+/* 
+ * Flex wrap variants for responsive behavior
+ * USAGE: class="tpress-button-group tpress-button-group-wrap"
+ */
+
+.tpress-button-group-wrap {
+  flex-wrap: wrap;
+}
+
+.tpress-button-group-nowrap {
+  flex-wrap: nowrap;
+}
+
+/* ========================================================================
+   FLEX UTILITIES
+   ======================================================================== */
+
+/* 
+ * Basic flex container
+ * USE WHEN: You just need display: flex without specific alignment
+ */
+.tpress-flex {
+  display: flex;
+}
+
+/* 
+ * Centered content (both axes)
+ * USE WHEN: You want to center content both horizontally and vertically
+ * EXAMPLE: Empty states, loading spinners, icon containers
+ */
+.tpress-flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 
+ * Left-aligned with vertical centering
+ * USE WHEN: You want content aligned to start but vertically centered
+ */
+.tpress-flex-start {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+/* 
+ * Right-aligned with vertical centering
+ * USE WHEN: You want content aligned to end but vertically centered
+ * EXAMPLE: Modal footer actions, right-aligned button groups
+ */
+.tpress-flex-end {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* 
+ * Space-between with vertical centering
+ * USE WHEN: You want content spread apart (title left, actions right)
+ * EXAMPLE: Alternative to header-actions for simple layouts
+ */
+.tpress-flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* 
+ * Vertical layout
+ * USE WHEN: You need to stack elements vertically
+ * EXAMPLE: Form layouts, content lists
+ * CURRENT USE: TopicSection.tsx for content items
+ */
+.tpress-flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 
+ * Horizontal layout (explicit)
+ * USE WHEN: You want to be explicit about horizontal direction
+ */
+.tpress-flex-row {
+  display: flex;
+  flex-direction: row;
+}
+
+/* ========================================================================
+   HEADER-ACTIONS PATTERN UTILITIES
+   ======================================================================== */
+
+/* 
+ * Base header with actions pattern - space-between with padding and border
+ * 
+ * USE WHEN: You have a simple header with direct title/action siblings
+ * STRUCTURE: <div class="tpress-header-actions"><span>Title</span><span>Action</span></div>
+ * 
+ * DO NOT USE: For nested structures like quiz modals where actions are in a separate container
+ * EXAMPLE: Modal headers, page headers, card headers with single-level content
+ */
+.tpress-header-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-lg) var(--space-2xl);
+  border-bottom: 1px solid var(--gray-300);
+}
+
+/* 
+ * Smaller header variant with reduced padding
+ * 
+ * USE WHEN: You need a compact header for cards, option items, or nested components
+ * STRUCTURE: Same as tpress-header-actions but with smaller padding
+ * 
+ * EXAMPLE: Quiz option card headers, accordion headers, list item headers
+ * CURRENT USE: SortableOption.tsx for option card headers
+ */
+.tpress-header-actions-sm {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-sm) var(--space-md);
+  /* border-bottom: 1px solid var(--gray-300); */
+}
+
+/* 
+ * Section header pattern with margin bottom
+ * 
+ * USE WHEN: You have a section title with actions that needs spacing below
+ * STRUCTURE: <div class="tpress-section-header"><h4>Title</h4><button>Action</button></div>
+ * 
+ * EXAMPLE: Questions section header, settings section headers
+ * CURRENT USE: QuestionList.tsx for questions header
+ */
+.tpress-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-md);
+}
+
+/* 
+ * Actions group for header patterns - standard spacing
+ * 
+ * USE WHEN: You have multiple action buttons that need consistent spacing
+ * STRUCTURE: <div class="tpress-header-actions-group"><button>Save</button><button>Cancel</button></div>
+ * 
+ * EXAMPLE: Modal action buttons, toolbar buttons, form actions
+ * CURRENT USE: QuizHeader.tsx for save/cancel buttons
+ */
+.tpress-header-actions-group {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+/* 
+ * Small actions group with tighter spacing
+ * 
+ * USE WHEN: You have compact action buttons that need minimal spacing
+ * STRUCTURE: Same as tpress-header-actions-group but with smaller gap
+ * 
+ * EXAMPLE: Card action buttons, inline edit controls, compact toolbars
+ * CURRENT USE: SortableOption.tsx for edit/delete buttons
+ */
+.tpress-header-actions-group-xs {
+  display: flex;
+  gap: var(--space-xs);
+  align-items: center;
+}
+
+/* ========================================================================
+   LOADING STATE UTILITIES
+   ======================================================================== */
+
+/* 
+ * Inline Loading State - Horizontal loading with text for content flows
+ * USE WHEN: Loading within content areas, form fields, or inline contexts
+ * STRUCTURE: Horizontal flex layout with spinner and text
+ * EXAMPLE: <div class="tpress-loading-state-inline"><Spinner/><p>Loading...</p></div>
+ * CURRENT USE: quiz-modal-loading-question-types, sortable-list-loading
+ */
+.tpress-loading-state-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  margin: var(--space-sm) 0;
+  font-size: var(--text-xs);
+  color: var(--gray-500);
+}
+
+/* 
+ * Centered Loading State - Vertical centered loading for sections/modals
+ * USE WHEN: Loading entire sections, modals, or page areas
+ * STRUCTURE: Centered vertical layout with spinner above text
+ * EXAMPLE: 
+ * <div class="tpress-loading-state-centered">
+ *   <Spinner/>
+ *   <p>Loading content...</p>
+ * </div>
+ * CURRENT USE: tutorpress-h5p-loading-state, tutorpress-modal-loading
+ */
+.tpress-loading-state-centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--space-3xl) * 2) var(--space-xl);
+  text-align: center;
+}
+
+.tpress-loading-state-centered .components-spinner {
+  margin-bottom: var(--space-lg);
+}
+
+.tpress-loading-state-centered p {
+  color: var(--gray-500);
+  margin: 0;
+}
+
+/* ========================================================================
+   EMPTY STATE UTILITIES
+   ======================================================================== */
+
+/* 
+ * Container Empty State - Dashed border container for fillable content areas
+ * USE WHEN: Content areas that can be filled (quiz center/right columns, drag zones)
+ * STRUCTURE: Simple container with centered text
+ * EXAMPLE: <div class="tpress-empty-state-container"><p>Drop questions here</p></div>
+ * CURRENT USE: quiz-modal-empty-state
+ */
+.tpress-empty-state-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 150px;
+  background: var(--gray-100);
+  border: 2px dashed var(--gray-300);
+  border-radius: var(--radius-sm);
+}
+
+.tpress-empty-state-container p {
+  color: var(--gray-500);
+  font-style: italic;
+  margin: 0;
+}
+
+/* 
+ * Page Empty State - Icon + title + description for complete empty experiences
+ * USE WHEN: Complete empty sections or modals (no content available)
+ * STRUCTURE: Centered content with icon, heading, and description
+ * EXAMPLE: 
+ * <div class="tpress-empty-state-page">
+ *   <div class="tpress-empty-state-icon">📄</div>
+ *   <h3>No Content</h3>
+ *   <p>Description here</p>
+ * </div>
+ * CURRENT USE: tutor-empty-state, tutorpress-h5p-empty-state
+ */
+.tpress-empty-state-page {
+  text-align: center;
+  max-width: 400px;
+  margin: 0 auto;
+  padding: calc(var(--space-3xl) * 2) var(--space-xl);
+}
+
+.tpress-empty-state-icon {
+  font-size: var(--text-display);
+  color: var(--gray-300);
+  margin-bottom: var(--space-xl);
+}
+
+.tpress-empty-state-page h3 {
+  margin: 0 0 var(--space-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+
+.tpress-empty-state-page p {
+  margin: 0;
+  color: var(--gray-500);
+  line-height: 1.5;
+}
+
+/* ========================================================================
+   ITEM ACTIONS PATTERN UTILITIES
+   ======================================================================== */
+
+/* 
+ * Hidden Item Actions - Actions that appear on hover
+ * USE WHEN: Action buttons that should be hidden until user hovers over item
+ * STRUCTURE: Apply to action container, requires hover parent selector
+ * EXAMPLE: 
+ * <div class="item-container">
+ *   <span>Content</span>
+ *   <div class="tpress-item-actions">...</div>
+ * </div>
+ * 
+ * CSS: .item-container:hover .tpress-item-actions { opacity: 1; }
+ * 
+ * CURRENT USE: TopicSection content items, quiz questions, topic headers
+ */
+.tpress-item-actions {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  white-space: nowrap; /* Prevent wrapping */
+}
+
+/* 
+ * Item Actions with Auto Margin - Combines actions with right push
+ * USE WHEN: Actions should be hidden on hover AND pushed to the right
+ * STRUCTURE: Same as tpress-item-actions but includes margin-left: auto
+ * EXAMPLE: Same as above but automatically positions to the right
+ * CURRENT USE: Most action button scenarios where right alignment is needed
+ */
+.tpress-item-actions-right {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  white-space: nowrap; /* Prevent wrapping */
+  margin-left: auto; /* Push to right */
+}
+
+/* ========================================================================
+   POSITIONING UTILITIES
+   ======================================================================== */
+
+/* 
+ * Prevent flex item from shrinking
+ * USE WHEN: You want an element to maintain its size in a flex container
+ * EXAMPLE: Icons, buttons, fixed-width elements
+ * CURRENT USE: TopicSection.tsx for content item icons and buttons
+ */
+.tpress-flex-shrink-0 {
+  flex-shrink: 0;
+}
+
+/* 
+ * Allow flex item to grow and fill available space
+ * USE WHEN: You want an element to expand to fill remaining space
+ */
+.tpress-flex-grow {
+  flex-grow: 1;
+}
+
+/* 
+ * Auto flex sizing (grow and shrink as needed)
+ * USE WHEN: You want flexible sizing based on content and container
+ */
+.tpress-flex-auto {
+  flex: 1 1 auto;
+}
+
+/* 
+ * Push element to the right using auto margin
+ * USE WHEN: You want to push an element to the right edge of its container
+ * EXAMPLE: Action buttons, status indicators
+ * CURRENT USE: TopicSection.tsx for topic actions, SortableOption.tsx for card actions
+ */
+.tpress-ml-auto {
+  margin-left: auto;
+}
+
+/* 
+ * Push element to the left using auto margin
+ * USE WHEN: You want to push an element to the left edge of its container
+ */
+.tpress-mr-auto {
+  margin-right: auto;
+}
+
+/* ========================================================================
+   RESPONSIVE UTILITIES
+   ======================================================================== */
+
+/* Mobile-first responsive button groups */
+@media (max-width: 767px) {
+  .tpress-button-group-responsive {
+    gap: var(--space-xs);
+  }
+
+  .tpress-button-group-responsive.tpress-button-group-wrap {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 600px) {
+  .tpress-button-group-mobile-stack {
+    flex-direction: column;
+    gap: var(--space-sm);
+    align-items: stretch;
+  }
+
+  .tpress-button-group-mobile-center {
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px; /* Tighter for mobile space constraints */
+  }
+
+  /* Reduce header padding on mobile */
+  .tpress-header-actions {
+    padding: var(--space-md) var(--space-lg);
+  }
+
+  .tpress-header-actions-sm {
+    padding: var(--space-xs) var(--space-sm);
+  }
+}
+
+/* ========================================================================
+   ERROR STATE UTILITIES
+   ======================================================================== */
+
+/* 
+ * Inline Error State - Form validation and inline errors
+ * USE WHEN: Form fields, inline validation messages, small error notifications
+ * STRUCTURE: Simple background with border and padding
+ * EXAMPLE: <div class="tpress-error-state-inline"><p>Field is required</p></div>
+ * CURRENT USE: tutorpress-form-error
+ */
+.tpress-error-state-inline {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  padding: var(--space-md);
+  border-radius: var(--radius-sm);
+  margin-top: var(--space-sm);
+}
+
+.tpress-error-state-inline p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-error);
+}
+
+/* 
+ * Section Error State - Content section errors with styled backgrounds
+ * USE WHEN: Content areas, preview sections, or content loading errors
+ * STRUCTURE: Centered content with background, padding, and structured text
+ * EXAMPLE: 
+ * <div class="tpress-error-state-section">
+ *   <strong class="tpress-error-message">Error:</strong>
+ *   <span class="tpress-error-details">Details here</span>
+ * </div>
+ * CURRENT USE: h5p-preview-error-content, sortable-list-error
+ */
+.tpress-error-state-section {
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-lg);
+  text-align: center;
+  margin: var(--space-sm) 0;
+}
+
+.tpress-error-message {
+  color: var(--color-error);
+  font-weight: 600;
+  margin: 0 0 calc(var(--space-xs) * 1.25) 0;
+  display: block;
+}
+
+.tpress-error-details {
+  color: var(--color-warning);
+  font-size: var(--text-xs);
+  margin: 0;
+  display: block;
+}
+
+/* 
+ * Alert Error State - System alerts and warnings
+ * USE WHEN: System notifications, warnings, or important alerts
+ * STRUCTURE: Left border accent with background and action buttons
+ * EXAMPLE: 
+ * <div class="tpress-error-state-alert">
+ *   <p>Alert message</p>
+ *   <button class="tpress-error-retry-btn">Retry</button>
+ * </div>
+ * CURRENT USE: tutor-alert, tutor-alert-warning
+ */
+.tpress-error-state-alert {
+  padding: var(--space-lg);
+  border-radius: var(--radius-sm);
+  border-left: var(--space-xs) solid var(--color-warning);
+  background: #fff8e1;
+  margin: var(--space-xl) 0;
+}
+
+.tpress-error-state-alert p {
+  margin: 0 0 var(--space-sm);
+  color: var(--color-text-primary);
+}
+
+.tpress-error-retry-btn {
+  margin-top: var(--space-sm);
+  padding: 6px var(--space-md);
+  background: var(--wp-admin-theme-color);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  transition: all 0.2s ease;
+}
+
+.tpress-error-retry-btn:hover {
+  background: var(--wp-admin-theme-color-darker-10);
+}

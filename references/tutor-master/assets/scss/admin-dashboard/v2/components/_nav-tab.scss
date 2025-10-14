@@ -1,0 +1,68 @@
+// Navigation Tab
+.tutor-option-nav-page {
+	&:not(.is-active) {
+		display: none;
+	}
+}
+
+.tutor-nav {
+	// admin option tabs
+	&.tutor-option-tabs {
+		.tutor-nav-link {
+			color: var(--tutor-color-secondary);
+			border: 1px solid transparent;
+
+			&:not(.is-active):not(:hover) {
+				[class^='tutor-icon-'] {
+					color: #9CA0AC;
+				}
+			}
+
+			&:hover {
+				background-color: transparent;
+				color: var(--tutor-color-primary);
+			}
+
+			&.is-active {
+				background-color: #FFFFFF;
+				color: var(--tutor-color-primary);
+				border-color: #e8e8e8;
+			}
+		}
+
+		.tutor-option-submenu-nav {
+			margin-left: 36px;
+			
+			.rtl & {
+				margin-right: 36px;
+				margin-left: 0;
+			}
+
+			.tutor-nav-link {
+				padding: 8px 12px;
+				
+				@include breakpoint-max(desktop) {
+					padding: 8px 20px;
+				}
+			}
+
+			@include breakpoint-max(desktop) {
+				margin-left: 0px;
+				margin-right: 0px;
+			}
+
+			@include breakpoint-max(mobile) {
+				margin-left: 20px;
+
+				.rtl & {
+					margin-right: 20px;
+					margin-left: 0;
+				}
+			}
+		}
+	}
+	&.tutor-is-sticky {
+		position: sticky;
+    	top: 120px;
+	}
+}

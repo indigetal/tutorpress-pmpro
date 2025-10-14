@@ -1,0 +1,785 @@
+/**
+ * Certificate Metabox Styles
+ *
+ * Styling for the certificate template selection metabox.
+ * Uses TutorPress design tokens and follows established component patterns.
+ *
+ * @package TutorPress
+ * @subpackage CSS/Components
+ * @since 1.0.0
+ */
+
+/* ============================================================================
+   CERTIFICATE METABOX LAYOUT
+   ============================================================================ */
+
+.tutorpress-certificate {
+  padding: var(--space-metabox);
+  background: var(--color-bg-primary);
+  border-radius: var(--radius-card);
+}
+
+/* Header Section */
+.tutorpress-certificate__header {
+  margin-bottom: var(--space-lg);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.tutorpress-certificate__description {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-normal);
+}
+
+/* ============================================================================
+   TABS LAYOUT WITH ORIENTATION FILTERS
+   ============================================================================ */
+
+.tutorpress-certificate__tabs-container {
+  position: relative;
+}
+
+/* Orientation Filters - positioned on right */
+.tutorpress-certificate__orientation-filters {
+  position: absolute;
+  right: 0;
+  top: 8px;
+  z-index: 10;
+}
+
+.tutorpress-certificate__filter-group {
+  display: flex;
+  gap: var(--space-button-gap);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-button);
+  padding: var(--space-xs);
+  background: var(--color-bg-secondary);
+  width: fit-content;
+}
+
+.tutorpress-certificate__filter-button {
+  background: transparent;
+  border: none;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-button);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-in-out);
+  white-space: nowrap;
+}
+
+.tutorpress-certificate__filter-button:hover {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+.tutorpress-certificate__filter-button.is-active {
+  background: var(--color-primary);
+  color: var(--white);
+  box-shadow: var(--shadow-sm);
+}
+
+.tutorpress-certificate__filter-button:focus {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* ============================================================================
+   TABS LAYOUT
+   ============================================================================ */
+
+.tutorpress-certificate__tabs {
+  margin-top: var(--space-lg);
+}
+
+/* WordPress TabPanel styling */
+.tutorpress-certificate__tabs .components-tab-panel__tabs {
+  display: flex;
+  border-bottom: 1px solid var(--color-border-light);
+  margin-bottom: var(--space-lg);
+}
+
+.tutorpress-certificate__tabs .components-tab-panel__tabs-item {
+  background: transparent;
+  border: none;
+  padding: var(--space-md) var(--space-lg);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all var(--duration-fast) var(--ease-in-out);
+}
+
+.tutorpress-certificate__tabs .components-tab-panel__tabs-item:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
+}
+
+.tutorpress-certificate__tabs .components-tab-panel__tabs-item.is-active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  background: var(--color-bg-primary);
+}
+
+.tutorpress-certificate__tabs .components-tab-panel__tab-content {
+  padding: var(--space-md) 0;
+}
+
+/* ============================================================================
+   TEMPLATE GRID
+   ============================================================================ */
+
+.tutorpress-certificate__grid {
+  min-height: 200px;
+}
+
+.tutorpress-certificate__grid-content {
+  margin-bottom: var(--space-lg);
+}
+
+.tutorpress-certificate__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-lg);
+  margin-top: var(--space-md);
+}
+
+/* ============================================================================
+   CERTIFICATE CARD COMPONENT
+   ============================================================================ */
+
+.certificate-card {
+  position: relative;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-primary);
+  overflow: hidden;
+  transition: all var(--duration-fast) var(--ease-in-out);
+  cursor: pointer;
+}
+
+.certificate-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.certificate-card--selected {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.certificate-card--disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.certificate-card--loading {
+  pointer-events: none;
+}
+
+/* Card Image Section */
+.certificate-card__image {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4/3;
+  overflow: hidden;
+  background: var(--color-bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.certificate-card__image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--duration-fast) var(--ease-in-out);
+}
+
+.certificate-card:hover .certificate-card__image img {
+  transform: scale(1.05);
+}
+
+/* Image Loading State */
+.certificate-card__image-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-secondary);
+}
+
+.certificate-card__spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--color-border-light);
+  border-top: 2px solid var(--color-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Image Error State */
+.certificate-card__image-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+  padding: var(--space-md);
+}
+
+/* Hover Information Bar */
+.certificate-card__hover-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(4px);
+  padding: var(--space-md);
+  opacity: 0;
+  transform: translateY(100%);
+  transition: all var(--duration-fast) var(--ease-in-out);
+}
+
+.certificate-card:hover .certificate-card__hover-info {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.certificate-card__title {
+  margin: 0 0 var(--space-sm) 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: var(--leading-tight);
+  text-transform: capitalize;
+}
+
+/* Action Buttons */
+.certificate-card__actions {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.certificate-card__actions .components-button {
+  height: 32px;
+  font-size: var(--text-xs);
+  padding: 0 var(--space-md);
+  flex: 1;
+}
+
+.certificate-card__actions .components-button.is-secondary {
+  border-color: var(--color-border-light);
+  color: var(--color-text-secondary);
+}
+
+.certificate-card__actions .components-button.is-secondary:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* Selection Badge */
+.certificate-card__selected-badge {
+  position: absolute;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  width: 24px;
+  height: 24px;
+  background: var(--color-primary);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--white);
+  box-shadow: var(--shadow-sm);
+  z-index: 2;
+}
+
+.certificate-card__selected-badge .components-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Loading Overlay */
+.certificate-card__loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+
+/* Template Card Placeholders (Legacy - Remove in Step 4 completion) */
+.tutorpress-certificate__card-placeholder {
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-card);
+  padding: var(--space-md);
+  background: var(--color-bg-primary);
+  transition: all var(--duration-fast) var(--ease-in-out);
+  cursor: pointer;
+}
+
+.tutorpress-certificate__card-placeholder:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.tutorpress-certificate__card-image {
+  width: 100%;
+  aspect-ratio: 4/3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: var(--space-sm);
+  background: var(--color-bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tutorpress-certificate__card-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tutorpress-certificate__card-title {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  text-align: center;
+  line-height: var(--leading-normal);
+  text-transform: capitalize;
+}
+
+/* Empty State */
+.tutorpress-certificate__empty {
+  text-align: center;
+  padding: var(--space-2xl);
+  color: var(--color-text-muted);
+}
+
+.tutorpress-certificate__empty p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+/* ============================================================================
+   SELECTION STATUS
+   ============================================================================ */
+
+.tutorpress-certificate__selection-status {
+  margin-top: var(--space-lg);
+  padding: var(--space-md);
+  background: var(--info-bg);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-card);
+}
+
+.tutorpress-certificate__selection-status p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+}
+
+.tutorpress-certificate__unsaved {
+  color: var(--color-warning);
+  font-weight: 500;
+}
+
+/* ============================================================================
+   LOADING & ERROR STATES
+   ============================================================================ */
+
+.tutorpress-certificate__error {
+  padding: var(--space-lg);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-card);
+  text-align: center;
+}
+
+.tutorpress-certificate__error p {
+  margin: 0 0 var(--space-sm) 0;
+  color: var(--error-text);
+  font-size: var(--text-sm);
+}
+
+.tutorpress-certificate__error p:last-child {
+  margin-bottom: 0;
+}
+
+.tutorpress-certificate__selection-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-card);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.tutorpress-certificate__selection-error {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-card);
+}
+
+.tutorpress-certificate__selection-error p {
+  margin: 0 0 var(--space-xs) 0;
+  color: var(--error-text);
+  font-size: var(--text-sm);
+}
+
+.tutorpress-certificate__selection-error p:last-child {
+  margin-bottom: 0;
+}
+
+/* ============================================================================
+   RESPONSIVE DESIGN
+   ============================================================================ */
+
+/* Tablet and smaller screens */
+@media (max-width: 768px) {
+  .tutorpress-certificate {
+    padding: var(--space-md);
+  }
+
+  .tutorpress-certificate__cards {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-md);
+  }
+
+  .tutorpress-certificate__orientation-filters {
+    position: static;
+    margin-bottom: var(--space-sm);
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .tutorpress-certificate__filter-group {
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .tutorpress-certificate__tabs .components-tab-panel__tabs-item {
+    flex: 1;
+    text-align: center;
+  }
+
+  /* Certificate card responsive adjustments */
+  .certificate-card__hover-info {
+    padding: var(--space-sm);
+  }
+
+  .certificate-card__title {
+    font-size: var(--text-xs);
+    margin-bottom: var(--space-xs);
+  }
+
+  .certificate-card__actions .components-button {
+    height: 28px;
+    font-size: var(--text-xs);
+    padding: 0 var(--space-sm);
+  }
+
+  .certificate-card__selected-badge {
+    width: 20px;
+    height: 20px;
+    top: var(--space-xs);
+    right: var(--space-xs);
+  }
+
+  .certificate-card__selected-badge .components-icon {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+/* Mobile screens */
+@media (max-width: 480px) {
+  .tutorpress-certificate__cards {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-sm);
+  }
+
+  .tutorpress-certificate__filter-button {
+    padding: var(--space-xs) var(--space-sm);
+    font-size: var(--text-xs);
+  }
+
+  /* Mobile certificate card adjustments - only show info bar on mobile */
+  .certificate-card__hover-info {
+    position: static !important;
+    opacity: 1 !important;
+    transform: none !important;
+    background: var(--color-bg-primary);
+    border-top: 1px solid var(--color-border-light);
+    padding: var(--space-xs);
+  }
+
+  .certificate-card__title {
+    font-size: var(--text-xs);
+    margin-bottom: var(--space-xs);
+  }
+
+  .certificate-card__actions {
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+
+  .certificate-card__actions .components-button {
+    height: 24px;
+    font-size: var(--text-xs);
+  }
+}
+
+/* ============================================================================
+   Certificate Preview Modal
+   ============================================================================ */
+
+.certificate-preview-modal .components-modal__content {
+  padding: 0;
+  margin: 0;
+  max-width: 95vw;
+  max-height: 95vh;
+  min-width: 800px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.certificate-preview-modal__container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 500px;
+  background: var(--color-surface);
+  padding: 0 80px; /* Add horizontal padding to keep arrows outside image area */
+}
+
+/* WordPress Modal Override for better certificate display */
+.certificate-preview-modal .components-modal__content {
+  border-radius: var(--border-radius);
+}
+
+/* Navigation Arrows */
+.certificate-preview-modal__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  background: rgba(255, 255, 255, 0.9) !important;
+  color: var(--color-text-primary) !important;
+  border: 1px solid var(--color-border-light) !important;
+  border-radius: var(--border-radius);
+  padding: var(--space-sm) !important;
+  min-width: auto !important;
+  width: auto !important;
+  height: auto !important;
+  font-size: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.certificate-preview-modal__nav:hover {
+  background: var(--color-surface) !important;
+  border-color: var(--color-border) !important;
+  box-shadow: var(--shadow-md);
+}
+
+.certificate-preview-modal__nav--prev {
+  left: var(--space-lg);
+}
+
+.certificate-preview-modal__nav--next {
+  right: var(--space-lg);
+}
+
+/* Preview Content */
+.certificate-preview-modal__content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.certificate-preview-modal__image {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-variant);
+  padding: var(--space-md);
+  overflow: hidden;
+  /* Flexible height to accommodate both portrait and landscape */
+  height: calc(90vh - 140px);
+  max-height: 600px;
+  min-height: 350px;
+}
+
+.certificate-preview-modal__image img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-lg);
+  /* Improve image quality */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+}
+
+.certificate-preview-modal__no-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xl);
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+/* Template Info */
+.certificate-preview-modal__info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  border-top: 1px solid var(--color-border-light);
+  background: var(--color-surface);
+  gap: var(--space-md);
+}
+
+.certificate-preview-modal__details {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-xs);
+}
+
+.certificate-preview-modal__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.certificate-preview-modal__orientation {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-transform: capitalize;
+}
+
+.certificate-preview-modal__badge {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--color-primary-light);
+  color: var(--color-primary-dark);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  border-radius: var(--border-radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Modal Actions */
+.certificate-preview-modal__actions {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.certificate-preview-modal__actions .components-button {
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+}
+
+/* Modal Responsive Design */
+@media (max-width: 900px) {
+  .certificate-preview-modal .components-modal__content {
+    max-width: 95vw;
+    max-height: 95vh;
+    min-width: 600px;
+  }
+
+  .certificate-preview-modal__container {
+    padding: 0 60px;
+  }
+
+  .certificate-preview-modal__nav--prev {
+    left: var(--space-sm);
+  }
+
+  .certificate-preview-modal__nav--next {
+    right: var(--space-sm);
+  }
+}
+
+@media (max-width: 768px) {
+  .certificate-preview-modal .components-modal__content {
+    max-width: 95vw;
+    max-height: 95vh;
+    min-width: auto;
+  }
+
+  .certificate-preview-modal__container {
+    padding: 0 40px;
+  }
+
+  .certificate-preview-modal__actions {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .certificate-preview-modal__nav {
+    padding: var(--space-xs);
+  }
+
+  .certificate-preview-modal__nav--prev {
+    left: var(--space-xs);
+  }
+
+  .certificate-preview-modal__nav--next {
+    right: var(--space-xs);
+  }
+}
+
+@media (max-width: 480px) {
+  .certificate-preview-modal__image {
+    padding: var(--space-sm);
+    min-height: 300px;
+  }
+
+  .certificate-preview-modal__info {
+    padding: var(--space-sm);
+  }
+}

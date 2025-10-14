@@ -1,0 +1,247 @@
+/**
+ * Quiz Editors Styles
+ * TinyMCE and WordPress editor integration for quiz questions
+ */
+
+/* TinyMCE Editor Styling - WordPress Classic Editor */
+.quiz-modal-tinymce-editor {
+  margin-bottom: var(--space-sm);
+}
+
+.quiz-modal-tinymce-editor .mce-tinymce {
+  border: 1px solid var(--gray-300) !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+.quiz-modal-tinymce-editor .mce-toolbar-grp {
+  border-bottom: 1px solid var(--gray-300) !important;
+  background: var(--gray-100) !important;
+}
+
+.quiz-modal-tinymce-editor .mce-edit-area {
+  border: none !important;
+}
+
+.quiz-modal-tinymce-editor .mce-edit-area iframe {
+  border: none !important;
+}
+
+/* WordPress Visual/Code Tab Styling for TinyMCE in Quiz Modal */
+.quiz-modal-wp-editor .wp-editor-wrap {
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.quiz-modal-wp-editor .wp-editor-tabs {
+  background: var(--gray-100);
+  border-bottom: 1px solid var(--gray-300);
+  padding: 0;
+  margin: 0;
+  display: flex;
+}
+
+.quiz-modal-wp-editor .wp-switch-editor {
+  background: transparent;
+  border: none;
+  padding: var(--space-sm) var(--space-lg);
+  margin: 0;
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--gray-500);
+  text-decoration: none;
+  border-radius: 0;
+  transition: background-color 0.15s ease-in-out;
+}
+
+.quiz-modal-wp-editor .wp-switch-editor:hover {
+  background: var(--gray-300);
+  color: var(--gray-700);
+}
+
+.quiz-modal-wp-editor .wp-switch-editor.active {
+  background: var(--white);
+  color: var(--gray-700);
+  font-weight: 600;
+  border-bottom: 1px solid var(--white);
+  margin-bottom: -1px;
+}
+
+.quiz-modal-wp-editor .wp-editor-container {
+  background: var(--white);
+}
+
+/* FORCE Visual mode by hiding text editor when in tmce-active mode - STRONGER RULES */
+.quiz-modal-wp-editor .wp-editor-wrap.tmce-active .wp-editor-area {
+  display: block !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap.html-active .wp-editor-area {
+  display: none !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap.html-active textarea.wp-editor-area {
+  display: none !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap.tmce-active textarea.wp-editor-area {
+  display: none !important;
+}
+
+/* Ensure TinyMCE editor container is visible in Visual mode - STRONGER RULES */
+.quiz-modal-wp-editor .wp-editor-wrap.tmce-active .mce-tinymce {
+  display: block !important;
+  visibility: visible !important;
+  height: auto !important;
+  min-height: 200px !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap.html-active .mce-tinymce {
+  display: none !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap textarea {
+  display: none !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap .mce-tinymce {
+  display: block !important;
+  visibility: visible !important;
+  height: auto !important;
+  min-height: 200px !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap .mce-edit-area {
+  min-height: 200px !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap .mce-edit-area iframe {
+  border: none !important;
+  min-height: 200px !important;
+}
+
+/* Force Visual tab to always appear active */
+.quiz-modal-wp-editor .wp-switch-editor[id$="-tmce"] {
+  background: var(--white) !important;
+  color: var(--gray-700) !important;
+  font-weight: 600 !important;
+  border-bottom: 1px solid var(--white) !important;
+  margin-bottom: -1px !important;
+}
+
+.quiz-modal-wp-editor .wp-switch-editor[id$="-html"] {
+  background: transparent !important;
+  color: var(--gray-500) !important;
+  font-weight: normal !important;
+}
+
+/* Prevent editor collapse by ensuring container has minimum height */
+.quiz-modal-wp-editor .wp-editor-container {
+  min-height: 240px !important;
+}
+
+.quiz-modal-wp-editor .wp-editor-wrap {
+  min-height: 240px !important;
+}
+
+/* Additional Editor Action Buttons for TinyMCE */
+.quiz-modal-tinymce-editor .quiz-modal-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-top: 1px solid var(--gray-300);
+  background: var(--gray-100);
+}
+
+.quiz-modal-tinymce-editor .quiz-modal-editor-actions .components-button {
+  min-height: 28px;
+  padding: var(--space-xs) var(--space-md);
+  font-size: var(--text-xs);
+  border-radius: var(--radius-sm);
+}
+
+.quiz-modal-tinymce-editor .quiz-modal-editor-actions .components-button.is-secondary {
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  color: var(--gray-500);
+}
+
+.quiz-modal-tinymce-editor .quiz-modal-editor-actions .components-button.is-secondary:hover {
+  background: var(--gray-300);
+  border-color: var(--gray-500);
+}
+
+.quiz-modal-tinymce-editor .quiz-modal-editor-actions .components-button.is-primary {
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary-hover);
+  color: white;
+}
+
+.quiz-modal-tinymce-editor .quiz-modal-editor-actions .components-button.is-primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-active);
+}
+
+/* Saved Content Styling */
+.quiz-modal-saved-content {
+  padding: var(--space-lg);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  background: var(--gray-100);
+}
+
+.quiz-modal-saved-content ul {
+  margin: var(--space-sm) 0;
+  padding-left: var(--space-xl);
+}
+
+.quiz-modal-saved-content ol {
+  margin: var(--space-sm) 0;
+  padding-left: var(--space-xl);
+}
+
+.quiz-modal-saved-content li {
+  margin-bottom: var(--space-xs);
+}
+
+.quiz-modal-saved-content p {
+  margin: var(--space-sm) 0;
+}
+
+.quiz-modal-saved-content p:last-child {
+  margin-bottom: 0;
+}
+
+.quiz-modal-saved-content strong {
+  font-weight: 600;
+}
+
+.quiz-modal-saved-content em {
+  font-style: italic;
+}
+
+.quiz-modal-saved-content a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.quiz-modal-saved-content a:hover {
+  text-decoration: underline;
+}
+
+/* Override WordPress editor tab styles in quiz modal */
+.quiz-modal-wp-editor .wp-switch-editor {
+  padding: var(--space-sm) var(--space-lg);
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.quiz-modal-wp-editor .wp-switch-editor:hover {
+  background: var(--gray-300);
+}
+
+.quiz-modal-wp-editor .wp-editor-tabs {
+  padding: 0;
+  margin: 0;
+}

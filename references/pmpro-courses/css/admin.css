@@ -1,0 +1,52 @@
+/* Admin styles for PMPro Courses */
+#pmpro_courses_lessons {
+	margin-bottom: 1em;
+}
+#pmpro_courses_lessons .inside h3 {
+	margin-bottom: 0;
+}
+table.pmpro-metabox-items {
+	width: 100%;
+}
+table.pmpro-metabox-items thead tr th {
+	background: #ccd0d4;
+	font-weight: bold;
+	padding: 8px 10px;
+	text-align: left;
+}
+table.pmpro-metabox-items tbody tr td label {
+	display: block;
+}
+
+/* Metabox for list of lessons in the course */
+table#pmpro_courses_table.pmpro-metabox-items {
+	margin: 14px 0;
+}
+table#pmpro_courses_table.pmpro-metabox-items tbody tr td {
+	vertical-align: middle;
+}
+
+/* Metabox for adding new lessons to the course */
+table#newmeta.pmpro-metabox-items tbody tr td {
+	padding-bottom: 0;
+	padding-top: 0;
+	vertical-align: bottom;
+}
+table#newmeta tbody tr td input {
+	width: 100%;
+}
+table#newmeta tbody tr td a.button {
+	display: block;
+	text-align: center;
+}
+table#newmeta {
+	margin-bottom: 1em;
+}
+
+/* Settings Form*/
+.form-table.pmpro-courses, .form-table.pmpro-courses tr.pmpro-courses-default, .form-table.pmpro-courses tr.pmpro-courses-lifterlms {
+	border-bottom: 1px solid #CCC;
+}
+.pmpro-courses-module-settings {
+	margin-top: 1em;
+}

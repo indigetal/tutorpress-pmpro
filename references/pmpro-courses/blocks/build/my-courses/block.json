@@ -1,0 +1,21 @@
+{
+    "$schema": "https://schemas.wp.org/trunk/block.json",
+    "apiVersion": 2,
+    "name": "pmpro-courses/my-courses",
+    "version": "1.0.0",
+    "title": "PMPro Courses: My Courses",
+    "category": "pmpro",
+    "icon": "media-default",
+    "description": "Show a list of courses a member has access.",
+    "supports": {
+        "html": false
+    },
+    "textdomain": "pmpro-courses",
+    "editorScript": "file:./index.js",
+    "attributes": {
+        "limit": {
+            "type": "string",
+            "default": "-1"
+        }
+    }
+}

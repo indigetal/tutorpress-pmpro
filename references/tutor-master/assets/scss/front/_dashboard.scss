@@ -1,0 +1,251 @@
+/* *********************** */
+
+/**
+ * Dashboard Table
+ */
+
+/* dashboard quiz attempts */
+.tutor-dashboard-content {
+	margin-bottom: 60px;
+	> h2 {
+		margin-bottom: 20px;
+	}
+}
+
+/* Dashboard Assignment */
+
+.tutor-dashboard-assignment-submitted-table tr td {
+	text-align: center;
+}
+
+.tutor-dashboard-assignment-submitted-table tr td a {
+	color: #8c94a8;
+	transition: 300ms;
+}
+
+.tutor-dashboard-assignment-submitted-table tr td a:hover {
+	color: var(--tutor-color-primary);
+}
+
+.tutor-dashboard-assignment-submitted-table tr td,
+.tutor-dashboard-assignment-submitted-table tr th {
+	border: 1px solid #dcdfe5;
+}
+
+/* Dashboard Assignment Review */
+
+.tutor-assignment-review-header {
+	margin-bottom: 30px;
+}
+
+.tutor-assignment-review-header h3 {
+	margin-bottom: 10px;
+	line-height: 28px;
+}
+
+.tutor-assignment-evaluate-wraps h3,
+.tutor-assignment-review-header h3 a {
+	font-size: 22px;
+	font-weight: 700;
+	color: var(--tutor-body-color);
+	display: block;
+}
+
+.tutor-assignment-review-header p {
+	margin: 0;
+	color: var(--tutor-body-color);
+	font-weight: 400;
+}
+
+.tutor-assignment-review-header p a {
+	font-weight: 400;
+	color: var(--tutor-body-color);
+}
+
+.tutor-assignment-review-header a {
+	transition: 300ms;
+}
+
+.tutor-assignment-review-header a:hover {
+	color: var(--tutor-color-primary);
+}
+
+.tutor-option-field-label label br {
+	display: none;
+}
+
+.tutor-option-field-label label p {
+	margin: 0;
+	display: inline-block;
+}
+
+/* end dashboard content*/
+
+.tutor-dashboard-avater img {
+	width: 70px;
+	height: 70px;
+	display: block;
+	border-radius: 50%;
+}
+
+.tutor-dashboard-student-info h4 {
+	font-size: 18px;
+	color: var(--tutor-color-muted);
+	margin-bottom: 0;
+}
+
+.tutor-dashboard-student-info h4 a {
+	color: var(--tutor-body-color);
+}
+
+.tutor-dashboard-user-role {
+	font-weight: 400;
+}
+
+@media (max-width: 991px) {
+	.tutor-dashboard-student .tutor-col-3,
+	.tutor-dashboard-student .tutor-col-9 {
+		flex: 0 0 100%;
+		max-width: 100%;
+	}
+	.profile-completion-warning-details {
+		margin-bottom: 10px;
+	}
+}
+
+/** Earning Report */
+
+.tutor-dashboard-menu-divider {
+	height: 1px;
+	margin: 10px 0;
+	overflow: hidden;
+	background-color: var(--tutor-border-color);
+}
+
+.tutor-dashboard-menu-divider-header {
+	color: #acacac;
+	padding: 10px 20px;
+	cursor: default;
+}
+
+.tutor-date-range-wrap {
+	display: inline-block;
+}
+
+.date-range-input {
+	position: relative;
+	width: 100%;
+}
+
+.date-range-input:last-child {
+	margin-right: 0;
+}
+
+.date-range-input:last-child button {
+	border-radius: 0;
+}
+
+.date-range-input input,
+.date-range-input input[type='text'] {
+	box-shadow: none;
+	line-height: 29px;
+	margin: 0;
+	padding-right: 30px;
+	padding-top: 0;
+	padding-bottom: 0;
+	width: 100%;
+}
+
+.date-range-input i.tutor-icon-calendar {
+	position: absolute;
+	right: 10px;
+	top: 7px;
+}
+
+.date-range-input button {
+	background-color: var(--tutor-color-primary);
+	color: #ffffff;
+	border: none;
+	line-height: 30px;
+	padding: 0 15px;
+}
+
+.date-range-input button:hover {
+	background-color: var(--tutor-color-primary-hover);
+}
+
+.tutor-dashboard-statement-table-wrap {
+	overflow-x: auto;
+}
+
+table.tutor-dashboard-statement-table p {
+	margin: 0;
+	padding: 0;
+}
+
+table.tutor-dashboard-statement-table p.small-text {
+	font-size: 12px;
+	color: #666666;
+}
+
+/** ENd earning report **/
+
+@media (max-width: 580px) {
+	.profile-completion-warning-details li {
+		display: block !important;
+	}
+}
+
+.tutor-mycourse-view,
+.tutor-mycourse-edit,
+.tutor-mycourse-delete {
+	color: var(--tutor-color-muted);
+	transition: 300ms;
+	i {
+		line-height: inherit;
+		display: inline-block;
+		vertical-align: top;
+		color: var(--tutor-color-primary);
+	}
+	&:hover {
+		color: var(--tutor-color-primary);
+	}
+}
+
+.tutor-dashboard-content-inner .tutor-mycourse-wrap {
+	display: flex;
+	margin-bottom: 30px;
+	border: 1px solid #dcdfe5;
+	border-radius: 4px;
+	flex-direction: row;
+	overflow: hidden;
+	position: relative;
+}
+
+@media (max-width: 580px) {
+	.tutor-dashboard-content-inner .tutor-mycourse-wrap {
+		flex-wrap: wrap;
+	}
+}
+
+.tutor-dashboard-content-inner .tutor-mycourse-wrap .tutor-course-status h4 {
+	display: none;
+}
+
+.tutor-dashboard-content-inner .tutor-mycourse-wrap p:last-child {
+	margin-bottom: 0;
+}
+
+//applies to small devices (landscape phones, less than 768px)
+@media screen and (max-width: 767.98px) {
+	.tutor-header-right-side {
+		justify-content: flex-start;
+		margin-bottom: 20px;
+	}
+}
+
+@include breakpoint-max(tablet) {
+	.tutor-header-right-side {
+		margin-top: 20px;
+	}
+}
