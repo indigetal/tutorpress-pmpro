@@ -721,8 +721,19 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		$meta_ids = array_map( 'intval', $meta_ids );
 
-		// Union of both sources
-		$candidate_ids = array_values( array_unique( array_merge( $associated_ids, $meta_ids ) ) );
+		// Discover levels via reverse meta (tertiary source — catches orphaned reverse-meta-only levels)
+		$reverse_meta_ids = array();
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$reverse_meta_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
+				'tutorpress_course_id',
+				(string) $course_id
+			) );
+		}
+		$reverse_meta_ids = array_map( 'intval', (array) $reverse_meta_ids );
+
+		// Union of all three sources
+		$candidate_ids = array_values( array_unique( array_merge( $associated_ids, $meta_ids, $reverse_meta_ids ) ) );
 
 		// Verify each candidate level exists in pmpro_membership_levels and classify
 		$valid_ids = array();
@@ -757,17 +768,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 			}
 		}
 
-		// Prune stale associations and rewrite meta
-		if ( ! empty( $stale_ids ) ) {
-			// Ensure cleanup class is available
-			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
-			}
-			foreach ( $stale_ids as $sid ) {
-				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::remove_course_level_mapping( $course_id, $sid );
-			}
-			error_log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_count=' . count( $stale_ids ) . ' course=' . $course_id . ' source=' . $src );
-		}
+        // Prune stale associations and rewrite meta
+        if ( ! empty( $stale_ids ) ) {
+            // Ensure cleanup class is available
+            if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+                require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+            }
+            foreach ( $stale_ids as $sid ) {
+                // Use full_delete_level for stale ids so we also remove any lingering
+                // level meta, categories and association rows even when the level
+                // row itself may already be missing. full_delete_level is idempotent
+                // and safe when called for non-existent ids.
+                \TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( $sid, true );
+                error_log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_level=' . $sid . ' course=' . $course_id . ' source=' . $src );
+            }
+            error_log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_count=' . count( $stale_ids ) . ' course=' . $course_id . ' source=' . $src );
+        }
 
 		// Rewrite _tutorpress_pmpro_levels to match verified valid_ids
 		update_post_meta( $course_id, '_tutorpress_pmpro_levels', $valid_ids );
@@ -853,6 +869,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$price = get_post_meta( $course_id, 'tutor_course_price', true );
 		
 		error_log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
+
+		// Step 3: Free branch (authoritative deletion)
+		if ( 'free' === $price_type ) {
+			if ( ! empty( $state['valid_ids'] ) ) {
+				// Ensure cleanup class is available
+				if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+					require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+				}
+				foreach ( $state['valid_ids'] as $level_id ) {
+					\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( $level_id, true );
+					error_log( '[TP-PMPRO] reconcile_course_levels free_branch deleted_level_id=' . $level_id . ' course=' . $course_id );
+				}
+			}
+			// Clear course meta
+			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+			error_log( '[TP-PMPRO] reconcile_course_levels free_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $state['valid_ids'] ) );
+			return; // Early return — no further reconcile needed for free courses
+		}
 	}
 
 	/**
