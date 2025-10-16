@@ -870,23 +870,103 @@ if ( ! defined( 'ABSPATH' ) ) {
 		
 		error_log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
 
-		// Step 3: Free branch (authoritative deletion)
+		// Branch handling: free / subscription / one_time / both
 		if ( 'free' === $price_type ) {
-			if ( ! empty( $state['valid_ids'] ) ) {
-				// Ensure cleanup class is available
-				if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-					require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
-				}
-				foreach ( $state['valid_ids'] as $level_id ) {
-					\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( $level_id, true );
-					error_log( '[TP-PMPRO] reconcile_course_levels free_branch deleted_level_id=' . $level_id . ' course=' . $course_id );
-				}
-			}
-			// Clear course meta
-			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-			error_log( '[TP-PMPRO] reconcile_course_levels free_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $state['valid_ids'] ) );
-			return; // Early return — no further reconcile needed for free courses
+			$this->handle_free_branch( $course_id, $state );
+			return;
 		}
+		if ( 'subscription' === $selling_option ) {
+			$this->handle_subscription_branch( $course_id, $state );
+			return;
+		}
+		if ( 'one_time' === $selling_option ) {
+			$this->handle_one_time_branch( $course_id, $state );
+			return;
+		}
+		// Default: ensure meta matches valid IDs (covers 'both' and other cases)
+		if ( ! empty( $state['valid_ids'] ) ) {
+			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
+		}
+	}
+
+	/**
+	 * Handle Free branch: delete all associated PMPro levels and clear meta.
+	 *
+	 * @param int $course_id
+	 * @param array $state
+	 * @return void
+	 */
+	private function handle_free_branch( $course_id, $state = array() ) {
+		$course_id = (int) $course_id;
+		if ( ! is_array( $state ) ) { $state = array(); }
+		$ids = isset( $state['valid_ids'] ) ? $state['valid_ids'] : array();
+		if ( empty( $ids ) ) {
+			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+			return;
+		}
+		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+		}
+		foreach ( $ids as $lid ) {
+			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
+			error_log( '[TP-PMPRO] handle_free_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
+		}
+		delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+		error_log( '[TP-PMPRO] handle_free_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
+	}
+
+	/**
+	 * Handle Subscription-only branch: delete one-time levels, keep recurring.
+	 *
+	 * @param int $course_id
+	 * @param array $state
+	 * @return void
+	 */
+	private function handle_subscription_branch( $course_id, $state = array() ) {
+		$course_id = (int) $course_id;
+		$one_time = isset( $state['one_time_ids'] ) ? (array) $state['one_time_ids'] : array();
+		$recurring = isset( $state['recurring_ids'] ) ? (array) $state['recurring_ids'] : array();
+		if ( empty( $one_time ) ) {
+			// Nothing to delete; ensure meta only contains recurring ids
+			update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
+			return;
+		}
+		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+		}
+		foreach ( $one_time as $lid ) {
+			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
+			error_log( '[TP-PMPRO] handle_subscription_branch deleted_one_time_level_id=' . (int) $lid . ' course=' . $course_id );
+		}
+		// Persist remaining recurring IDs
+		update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
+		error_log( '[TP-PMPRO] handle_subscription_branch updated_course_levels; course=' . $course_id . ' recurring_count=' . count( $recurring ) );
+	}
+
+	/**
+	 * Handle One-time-only branch: keep one-time levels, remove recurring levels.
+	 * If multiple one-time levels exist, prefer the first and keep all one-time ids by default.
+	 *
+	 * @param int $course_id
+	 * @param array $state
+	 * @return void
+	 */
+	private function handle_one_time_branch( $course_id, $state = array() ) {
+		$course_id = (int) $course_id;
+		$one_time = isset( $state['one_time_ids'] ) ? (array) $state['one_time_ids'] : array();
+		$recurring = isset( $state['recurring_ids'] ) ? (array) $state['recurring_ids'] : array();
+		if ( ! empty( $recurring ) ) {
+			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+			}
+			foreach ( $recurring as $rid ) {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $rid, true );
+				error_log( '[TP-PMPRO] handle_one_time_branch deleted_recurring_level_id=' . (int) $rid . ' course=' . $course_id );
+			}
+		}
+		// Persist the one-time ids (possibly empty)
+		update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $one_time ) ) );
+		error_log( '[TP-PMPRO] handle_one_time_branch updated_course_levels; course=' . $course_id . ' one_time_count=' . count( $one_time ) );
 	}
 
 	/**

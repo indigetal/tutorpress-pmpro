@@ -86,15 +86,22 @@ class TutorPress_PMPro_Mapper {
             
         }
 
+        // Derive payment_type from PMPro level data
+        // If billing_amount is 0 and cycle_number is 0, it's a one-time purchase
+        $billing_amount = isset( $l['billing_amount'] ) ? floatval( $l['billing_amount'] ) : 0.0;
+        $cycle_number = isset( $l['cycle_number'] ) ? intval( $l['cycle_number'] ) : 0;
+        $payment_type = ( $billing_amount <= 0 && $cycle_number === 0 ) ? 'one_time' : 'recurring';
+
         return array(
             'id'                => (int) ( $l['id'] ?? 0 ),
             'plan_name'         => $l['name'] ?? '',
             'description'       => $l['description'] ?? '',
             // regular_price here represents the recurring/renewal price (billing_amount)
-            'regular_price'     => isset( $l['billing_amount'] ) ? floatval( $l['billing_amount'] ) : 0.0,
+            'regular_price'     => $billing_amount,
             // enrollment_fee is the initial payment
             'enrollment_fee'    => isset( $l['initial_payment'] ) ? floatval( $l['initial_payment'] ) : 0.0,
-            'recurring_value'   => isset( $l['cycle_number'] ) ? intval( $l['cycle_number'] ) : 0,
+            'payment_type'      => $payment_type,
+            'recurring_value'   => $cycle_number,
             // Normalize interval to lowercase token expected by the UI (e.g. 'month', 'week')
             'recurring_interval'=> isset( $l['cycle_period'] ) ? strtolower( trim( $l['cycle_period'] ) ) : '',
             'recurring_limit'   => isset( $l['billing_limit'] ) ? intval( $l['billing_limit'] ) : 0,

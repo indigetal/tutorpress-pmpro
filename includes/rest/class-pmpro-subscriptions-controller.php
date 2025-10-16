@@ -268,6 +268,32 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 
+		// Filter plans by the course's current selling_option (if applicable)
+		$selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
+		error_log( '[TP-PMPRO] get_course_subscriptions filter: course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'empty' ) . ' plans_before_filter=' . count( $plans ) );
+		if ( ! empty( $plans ) && ! empty( $selling_option ) ) {
+			// Filter based on selling_option: only include matching payment types
+			$plans = array_filter( $plans, function( $plan ) use ( $selling_option ) {
+				$plan_type = isset( $plan['payment_type'] ) ? $plan['payment_type'] : 'recurring';
+				$match = false;
+				if ( 'one_time' === $selling_option ) {
+					// Only show one-time plans
+					$match = 'one_time' === $plan_type;
+				} elseif ( 'subscription' === $selling_option ) {
+					// Only show recurring plans
+					$match = 'recurring' === $plan_type;
+				} else {
+					// 'both' or other: show all plans
+					$match = true;
+				}
+				error_log( '[TP-PMPRO] get_course_subscriptions filter_item: plan_id=' . ( isset( $plan['id'] ) ? $plan['id'] : 'unknown' ) . ' plan_type=' . $plan_type . ' selling_option=' . $selling_option . ' match=' . ( $match ? 'yes' : 'no' ) );
+				return $match;
+			} );
+			// Re-index array to ensure clean structure
+			$plans = array_values( $plans );
+		}
+		error_log( '[TP-PMPRO] get_course_subscriptions filter: plans_after_filter=' . count( $plans ) );
+
 		// If course is not published, also include any pending (queued) plans stored in meta
 		$status = get_post_status( (int) $course_id );
 		if ( 'publish' !== $status ) {
