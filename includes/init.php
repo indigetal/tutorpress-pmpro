@@ -955,6 +955,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$course_id = (int) $course_id;
 		$one_time = isset( $state['one_time_ids'] ) ? (array) $state['one_time_ids'] : array();
 		$recurring = isset( $state['recurring_ids'] ) ? (array) $state['recurring_ids'] : array();
+
+		// Step 1: Delete all recurring levels
 		if ( ! empty( $recurring ) ) {
 			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
 				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
@@ -964,9 +966,77 @@ if ( ! defined( 'ABSPATH' ) ) {
 				error_log( '[TP-PMPRO] handle_one_time_branch deleted_recurring_level_id=' . (int) $rid . ' course=' . $course_id );
 			}
 		}
-		// Persist the one-time ids (possibly empty)
-		update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $one_time ) ) );
-		error_log( '[TP-PMPRO] handle_one_time_branch updated_course_levels; course=' . $course_id . ' one_time_count=' . count( $one_time ) );
+
+		// Step 2: Ensure exactly one one-time level exists (upsert logic)
+		$level_id = 0;
+		$regular_price = get_post_meta( $course_id, 'tutor_course_price', true );
+		$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
+
+		if ( ! empty( $one_time ) ) {
+			// One-time level(s) exist: update the first one with current price
+			$level_id = (int) $one_time[0];
+			global $wpdb;
+			$update_data = array(
+				'name'            => get_the_title( $course_id ) . ' (One-time)',
+				'description'     => get_post_field( 'post_excerpt', $course_id ) ?: '',
+				'initial_payment' => $regular_price,
+				'billing_amount'  => 0,
+				'cycle_number'    => 0,
+				'cycle_period'    => '',
+				'billing_limit'   => 0,
+			);
+			$wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $level_id ), array( '%s', '%s', '%f', '%f', '%d', '%s', '%d' ), array( '%d' ) );
+			error_log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+		} else {
+			// No one-time level exists: create one with course price
+			if ( $regular_price > 0 ) {
+				global $wpdb;
+				$insert_data = array(
+					'name'            => get_the_title( $course_id ) . ' (One-time)',
+					'description'     => get_post_field( 'post_excerpt', $course_id ) ?: '',
+					'initial_payment' => $regular_price,
+					'billing_amount'  => 0,
+					'cycle_number'    => 0,
+					'cycle_period'    => '',
+					'billing_limit'   => 0,
+					'trial_limit'     => 0,
+					'trial_amount'    => 0.0,
+				);
+				$wpdb->insert( $wpdb->pmpro_membership_levels, $insert_data );
+				$level_id = (int) $wpdb->insert_id;
+				if ( $level_id > 0 ) {
+					error_log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+				}
+			} else {
+				error_log( '[TP-PMPRO] handle_one_time_branch no_price_set; course=' . $course_id );
+				// No price set and no existing level; just clear meta
+				delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+				return;
+			}
+		}
+
+		// Step 3: Set reverse ownership meta and ensure association
+		if ( $level_id > 0 ) {
+			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+				update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
+				update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
+				error_log( '[TP-PMPRO] handle_one_time_branch set_reverse_meta level_id=' . $level_id . ' course=' . $course_id );
+			}
+			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
+				require_once $this->path . 'includes/class-pmpro-association.php';
+			}
+			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
+			error_log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' course=' . $course_id );
+		}
+
+		// Step 4: Update course meta with final level ID(s)
+		if ( $level_id > 0 ) {
+			update_post_meta( $course_id, '_tutorpress_pmpro_levels', array( $level_id ) );
+			error_log( '[TP-PMPRO] handle_one_time_branch final_meta_update; course=' . $course_id . ' level_id=' . $level_id );
+		} else {
+			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+			error_log( '[TP-PMPRO] handle_one_time_branch cleared_meta; course=' . $course_id );
+		}
 	}
 
 	/**
