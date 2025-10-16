@@ -814,78 +814,93 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
 		error_log( '[TP-PMPRO] reconcile_course_levels fired; course=' . $course_id . ' source=' . $src );
 
-		// Consume any pending plans saved while in draft
-		$pending = get_post_meta( $course_id, '_tutorpress_pmpro_pending_plans', true );
-		if ( is_array( $pending ) && ! empty( $pending ) ) {
-			error_log( '[TP-PMPRO] reconcile_course_levels pending_count=' . count( $pending ) . ' course=' . $course_id );
-			foreach ( $pending as $plan_params ) {
-				try {
-					// Map to PMPro level data and create level now that we're published
-					require_once $this->path . 'includes/class-pmpro-mapper.php';
-					$mapper = new \TutorPress_PMPro_Mapper();
-					$level_data = $mapper->map_ui_to_pmpro( (array) $plan_params );
-					$db_data = $level_data;
-					if ( isset( $db_data['meta'] ) ) { unset( $db_data['meta'] ); }
-					// Normalize recurring vs one_time if provided
-					if ( isset( $level_data['payment_type'] ) && 'one_time' === $level_data['payment_type'] ) {
-						$db_data['billing_amount'] = 0; $db_data['cycle_number'] = 0; $db_data['cycle_period'] = ''; $db_data['billing_limit'] = 0;
-					}
-					global $wpdb;
-					$wpdb->insert( $wpdb->pmpro_membership_levels, $db_data );
-					$level_id = (int) $wpdb->insert_id;
-					if ( $level_id > 0 ) {
-						// ✅ KEY INSIGHT: Always set reverse ownership meta
-						if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-							update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
-							update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
+		// Step 0: Acquire short-lived lock to prevent concurrent double-runs
+		$lock_key = 'tp_pmpro_lock_' . $course_id;
+		if ( get_transient( $lock_key ) ) {
+			error_log( '[TP-PMPRO] reconcile_course_levels skipped (already running); course=' . $course_id );
+			return;
+		}
+		set_transient( $lock_key, 1, 5 ); // 5-second lock expiry
+		error_log( '[TP-PMPRO] reconcile_course_levels acquired_lock; course=' . $course_id );
+
+		try {
+			// Consume any pending plans saved while in draft
+			$pending = get_post_meta( $course_id, '_tutorpress_pmpro_pending_plans', true );
+			if ( is_array( $pending ) && ! empty( $pending ) ) {
+				error_log( '[TP-PMPRO] reconcile_course_levels pending_count=' . count( $pending ) . ' course=' . $course_id );
+				foreach ( $pending as $plan_params ) {
+					try {
+						// Map to PMPro level data and create level now that we're published
+						require_once $this->path . 'includes/class-pmpro-mapper.php';
+						$mapper = new \TutorPress_PMPro_Mapper();
+						$level_data = $mapper->map_ui_to_pmpro( (array) $plan_params );
+						$db_data = $level_data;
+						if ( isset( $db_data['meta'] ) ) { unset( $db_data['meta'] ); }
+						// Normalize recurring vs one_time if provided
+						if ( isset( $level_data['payment_type'] ) && 'one_time' === $level_data['payment_type'] ) {
+							$db_data['billing_amount'] = 0; $db_data['cycle_number'] = 0; $db_data['cycle_period'] = ''; $db_data['billing_limit'] = 0;
 						}
-						// ✅ KEY INSIGHT: Always ensure association row exists
-						if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
-							require_once $this->path . 'includes/class-pmpro-association.php';
+						global $wpdb;
+						$wpdb->insert( $wpdb->pmpro_membership_levels, $db_data );
+						$level_id = (int) $wpdb->insert_id;
+						if ( $level_id > 0 ) {
+							// ✅ KEY INSIGHT: Always set reverse ownership meta
+							if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+								update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
+								update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
+							}
+							// ✅ KEY INSIGHT: Always ensure association row exists
+							if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
+								require_once $this->path . 'includes/class-pmpro-association.php';
+							}
+							\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
+							
+							// Update course meta list
+							$existing = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+							if ( ! is_array( $existing ) ) { $existing = array(); }
+							$existing[] = $level_id;
+							update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_unique( array_map( 'intval', $existing ) ) ) );
+							error_log( '[TP-PMPRO] reconcile_course_levels created_level_id=' . $level_id . ' owner=' . $course_id . ' assoc=ensured course=' . $course_id );
 						}
-						\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
-						
-						// Update course meta list
-						$existing = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
-						if ( ! is_array( $existing ) ) { $existing = array(); }
-						$existing[] = $level_id;
-						update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_unique( array_map( 'intval', $existing ) ) ) );
-						error_log( '[TP-PMPRO] reconcile_course_levels created_level_id=' . $level_id . ' owner=' . $course_id . ' assoc=ensured course=' . $course_id );
+					} catch ( \Exception $e ) {
+						error_log( '[TP-PMPRO] reconcile_course_levels error creating pending plan: ' . $e->getMessage() . ' course=' . $course_id );
 					}
-				} catch ( \Exception $e ) {
-					error_log( '[TP-PMPRO] reconcile_course_levels error creating pending plan: ' . $e->getMessage() . ' course=' . $course_id );
 				}
+				// Clear pending
+				delete_post_meta( $course_id, '_tutorpress_pmpro_pending_plans' );
 			}
-			// Clear pending
-			delete_post_meta( $course_id, '_tutorpress_pmpro_pending_plans' );
-		}
 
-		// Step 2: Association discovery and context extraction
-		$state = $this->get_course_pmpro_state( $course_id, array( 'source' => $src ) );
-		
-		// Read course pricing context from post meta
-		$selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
-		$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
-		$price = get_post_meta( $course_id, 'tutor_course_price', true );
-		
-		error_log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
+			// Step 2: Association discovery and context extraction
+			$state = $this->get_course_pmpro_state( $course_id, array( 'source' => $src ) );
+			
+			// Read course pricing context from post meta
+			$selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
+			$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
+			$price = get_post_meta( $course_id, 'tutor_course_price', true );
+			
+			error_log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
 
-		// Branch handling: free / subscription / one_time / both
-		if ( 'free' === $price_type ) {
-			$this->handle_free_branch( $course_id, $state );
-			return;
-		}
-		if ( 'subscription' === $selling_option ) {
-			$this->handle_subscription_branch( $course_id, $state );
-			return;
-		}
-		if ( 'one_time' === $selling_option ) {
-			$this->handle_one_time_branch( $course_id, $state );
-			return;
-		}
-		// Default: ensure meta matches valid IDs (covers 'both' and other cases)
-		if ( ! empty( $state['valid_ids'] ) ) {
-			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
+			// Branch handling: free / subscription / one_time / both
+			if ( 'free' === $price_type ) {
+				$this->handle_free_branch( $course_id, $state );
+				return;
+			}
+			if ( 'subscription' === $selling_option ) {
+				$this->handle_subscription_branch( $course_id, $state );
+				return;
+			}
+			if ( 'one_time' === $selling_option ) {
+				$this->handle_one_time_branch( $course_id, $state );
+				return;
+			}
+			// Default: ensure meta matches valid IDs (covers 'both' and other cases)
+			if ( ! empty( $state['valid_ids'] ) ) {
+				update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
+			}
+		} finally {
+			// Always cleanup lock, even if exception or early return
+			delete_transient( $lock_key );
+			error_log( '[TP-PMPRO] reconcile_course_levels released_lock; course=' . $course_id );
 		}
 	}
 
