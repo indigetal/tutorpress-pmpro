@@ -103,9 +103,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 		add_action( 'save_post_courses', array( $this, 'schedule_reconcile_course_levels' ), 999, 3 );
 		add_action( 'transition_post_status', array( $this, 'maybe_reconcile_on_status' ), 20, 3 );
 		add_action( 'tp_pmpro_reconcile_course', array( $this, 'reconcile_course_levels' ), 10, 1 );
-
-		// On permanent delete of a course/bundle, remove associated PMPro levels
 		add_action( 'before_delete_post', array( $this, 'delete_course_levels_on_delete' ), 10, 1 );
+
+		// Admin on-demand action for manual reconciliation
+		add_filter( 'bulk_actions-edit-courses', array( $this, 'add_reconcile_bulk_action' ) );
+		add_action( 'handle_bulk_actions-edit-courses', array( $this, 'handle_reconcile_bulk_action' ), 10, 3 );
 	}
 
 	public function notice_tutor_missing() {
@@ -1279,6 +1281,43 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 
 		// Successfully attached the level.
+	}
+
+	/**
+	 * Add a bulk action for manual reconciliation.
+	 *
+	 * @param array $bulk_actions The existing bulk actions.
+	 * @return array
+	 */
+	public function add_reconcile_bulk_action( $bulk_actions ) {
+		$bulk_actions['reconcile_pmpro_levels'] = __( 'Reconcile PMPro Levels', 'tutorpress-pmpro' );
+		return $bulk_actions;
+	}
+
+	/**
+	 * Handle the bulk action for manual reconciliation.
+	 *
+	 * @param string $redirect_to The redirect URL.
+	 * @param string $action      The action being taken.
+	 * @param array  $ids         The item IDs.
+	 * @return string
+	 */
+	public function handle_reconcile_bulk_action( $redirect_to, $action, $ids ) {
+		if ( $action !== 'reconcile_pmpro_levels' ) {
+			return $redirect_to;
+		}
+
+		$course_ids = array_map( 'intval', $ids );
+		foreach ( $course_ids as $course_id ) {
+			// Schedule reconcile for each selected course
+			if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( $course_id ) ) ) {
+				wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( $course_id ) );
+				error_log( '[TP-PMPRO] Bulk reconcile scheduled for course=' . $course_id );
+			}
+		}
+
+		$redirect_to = add_query_arg( 'reconcile_bulk_action', 'success', $redirect_to );
+		return $redirect_to;
 	}
 
 }
