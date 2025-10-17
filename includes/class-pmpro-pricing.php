@@ -25,9 +25,7 @@ class PMPro_Pricing {
 		}
 
 		// Debug: trace pricing resolution for this course
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[TP-PMPRO] pricing: course_id=' . $course_id );
-		}
+		self::log( '[TP-PMPRO] pricing: course_id=' . $course_id );
 
 		if ( ! self::is_pmpro_enabled() ) {
 			return null;
@@ -38,9 +36,7 @@ class PMPro_Pricing {
 		}
 
 		$level_ids = self::get_associated_level_ids( $course_id );
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[TP-PMPRO] pricing: assoc_level_ids=' . json_encode( $level_ids ) );
-		}
+		self::log( '[TP-PMPRO] pricing: assoc_level_ids=' . json_encode( $level_ids ) );
 		if ( empty( $level_ids ) ) {
 			return null;
 		}
@@ -52,9 +48,7 @@ class PMPro_Pricing {
 		foreach ( $level_ids as $lid ) {
 			$level = function_exists( 'pmpro_getLevel' ) ? \pmpro_getLevel( $lid ) : null;
 			if ( ! $level ) {
-				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-					error_log( '[TP-PMPRO] pricing: level_missing id=' . $lid );
-				}
+				self::log( '[TP-PMPRO] pricing: level_missing id=' . $lid );
 				continue;
 			}
 
@@ -71,15 +65,11 @@ class PMPro_Pricing {
 				$prices[]   = $initial_payment;
 			}
 
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				error_log( '[TP-PMPRO] pricing: level=' . $lid . ' init=' . $initial_payment . ' bill_amt=' . $billing_amount . ' cycle=' . $cycle_number . ' period=' . $cycle_period );
-			}
+			self::log( '[TP-PMPRO] pricing: level=' . $lid . ' init=' . $initial_payment . ' bill_amt=' . $billing_amount . ' cycle=' . $cycle_number . ' period=' . $cycle_period );
 		}
 
 		if ( empty( $prices ) ) {
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				error_log( '[TP-PMPRO] pricing: no_prices_resolved' );
-			}
+			self::log( '[TP-PMPRO] pricing: no_prices_resolved' );
 			return null;
 		}
 
@@ -89,17 +79,17 @@ class PMPro_Pricing {
 			if ( ! empty( $recurring ) ) {
 				$entry = $recurring[0];
 				$val = sprintf( '%s %s/%s', self::format_amount( $entry['amount'], $currency_symbol, $currency_position ), self::per_label(), self::period_label( $entry['period'] ) );
-				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) { error_log( '[TP-PMPRO] pricing: resolved_recurring=' . $val ); }
+				self::log( '[TP-PMPRO] pricing: resolved_recurring=' . $val );
 				return $val;
 			}
 			$val = sprintf( '%s %s', self::format_amount( $prices[0], $currency_symbol, $currency_position ), __( 'one-time', 'tutorpress-pmpro' ) );
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) { error_log( '[TP-PMPRO] pricing: resolved_one_time=' . $val ); }
+			self::log( '[TP-PMPRO] pricing: resolved_one_time=' . $val );
 			return $val;
 		}
 
 		$min = min( $prices );
 		$val = sprintf( '%s %s', __( 'Starts from', 'tutorpress-pmpro' ), self::format_amount( $min, $currency_symbol, $currency_position ) );
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) { error_log( '[TP-PMPRO] pricing: resolved_min=' . $val ); }
+		self::log( '[TP-PMPRO] pricing: resolved_min=' . $val );
 		return $val;
 	}
 
@@ -201,6 +191,12 @@ class PMPro_Pricing {
 				return __( 'year', 'tutorpress-pmpro' );
 			default:
 				return esc_html( $period );
+		}
+	}
+
+	private static function log( $message ) {
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+			error_log( $message );
 		}
 	}
 }

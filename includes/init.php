@@ -605,7 +605,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$error_prefix = '[TP-PMPRO] reconcile_course_levels_rest';
 		// Guard: only proceed for published courses
 		if ( 'publish' !== get_post_status( $course_id ) ) {
-			error_log( $error_prefix . ' skipped (not published); course=' . $course_id );
+			$this->log( $error_prefix . ' skipped (not published); course=' . $course_id );
 			return;
 		}
 
@@ -631,12 +631,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$price = get_post_meta( $course_id, 'tutor_course_price', true );
 		}
 
-		error_log( $error_prefix . ' context extracted; course=' . $course_id . ' creating=' . ( $creating ? '1' : '0' ) . ' selling_option=' . ( $so ? $so : 'n/a' ) . ' price_type=' . ( $pt ? $pt : 'n/a' ) . ' price=' . ( null !== $price ? $price : 'n/a' ) );
+		$this->log( $error_prefix . ' context extracted; course=' . $course_id . ' creating=' . ( $creating ? '1' : '0' ) . ' selling_option=' . ( $so ? $so : 'n/a' ) . ' price_type=' . ( $pt ? $pt : 'n/a' ) . ' price=' . ( null !== $price ? $price : 'n/a' ) );
 
 		// Schedule reconcile shortly after REST save to ensure all meta is persisted
 		if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( $course_id ) ) ) {
 			wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( $course_id ) );
-			error_log( $error_prefix . ' scheduled reconcile in 1s; course=' . $course_id );
+			$this->log( $error_prefix . ' scheduled reconcile in 1s; course=' . $course_id );
 		}
 	}
 
@@ -654,13 +654,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		// Guard: only schedule reconcile for published courses
 		if ( 'publish' !== get_post_status( $post_id ) ) {
-			error_log( '[TP-PMPRO] schedule_reconcile_course_levels skipped (not published); course=' . (int) $post_id );
+			$this->log( '[TP-PMPRO] schedule_reconcile_course_levels skipped (not published); course=' . (int) $post_id );
 			return;
 		}
-		error_log( '[TP-PMPRO] schedule_reconcile_course_levels fired; course=' . (int) $post_id . ' update=' . ( $update ? '1' : '0' ) );
+		$this->log( '[TP-PMPRO] schedule_reconcile_course_levels fired; course=' . (int) $post_id . ' update=' . ( $update ? '1' : '0' ) );
 		if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( (int) $post_id ) ) ) {
 			wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( (int) $post_id ) );
-			error_log( '[TP-PMPRO] scheduled reconcile in 1s; course=' . (int) $post_id );
+			$this->log( '[TP-PMPRO] scheduled reconcile in 1s; course=' . (int) $post_id );
 		}
 	}
 
@@ -677,10 +677,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		if ( 'publish' === $new_status && 'publish' !== $old_status ) {
-			error_log( '[TP-PMPRO] maybe_reconcile_on_status fired; course=' . (int) $post->ID . ' new=publish old=' . $old_status );
+			$this->log( '[TP-PMPRO] maybe_reconcile_on_status fired; course=' . (int) $post->ID . ' new=publish old=' . $old_status );
 			if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( (int) $post->ID ) ) ) {
 				wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( (int) $post->ID ) );
-				error_log( '[TP-PMPRO] maybe_reconcile_on_status scheduled reconcile in 1s; course=' . (int) $post->ID );
+				$this->log( '[TP-PMPRO] maybe_reconcile_on_status scheduled reconcile in 1s; course=' . (int) $post->ID );
 			}
 		}
 	}
@@ -782,15 +782,15 @@ if ( ! defined( 'ABSPATH' ) ) {
                 // row itself may already be missing. full_delete_level is idempotent
                 // and safe when called for non-existent ids.
                 \TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( $sid, true );
-                error_log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_level=' . $sid . ' course=' . $course_id . ' source=' . $src );
+                $this->log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_level=' . $sid . ' course=' . $course_id . ' source=' . $src );
             }
-            error_log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_count=' . count( $stale_ids ) . ' course=' . $course_id . ' source=' . $src );
+            $this->log( '[TP-PMPRO] get_course_pmpro_state pruned_stale_count=' . count( $stale_ids ) . ' course=' . $course_id . ' source=' . $src );
         }
 
 		// Rewrite _tutorpress_pmpro_levels to match verified valid_ids
 		update_post_meta( $course_id, '_tutorpress_pmpro_levels', $valid_ids );
 
-		error_log( '[TP-PMPRO] get_course_pmpro_state discovered; course=' . $course_id . ' valid=' . count( $valid_ids ) . ' one_time=' . count( $one_time_ids ) . ' recurring=' . count( $recurring_ids ) . ' stale=' . count( $stale_ids ) . ' source=' . $src );
+		$this->log( '[TP-PMPRO] get_course_pmpro_state discovered; course=' . $course_id . ' valid=' . count( $valid_ids ) . ' one_time=' . count( $one_time_ids ) . ' recurring=' . count( $recurring_ids ) . ' stale=' . count( $stale_ids ) . ' source=' . $src );
 
 		return array(
 			'valid_ids'     => $valid_ids,
@@ -810,26 +810,26 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$course_id = (int) $course_id;
 		// Guard: only reconcile for published courses
 		if ( 'publish' !== get_post_status( $course_id ) ) {
-			error_log( '[TP-PMPRO] reconcile_course_levels skipped (not published); course=' . $course_id );
+			$this->log( '[TP-PMPRO] reconcile_course_levels skipped (not published); course=' . $course_id );
 			return;
 		}
 		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
-		error_log( '[TP-PMPRO] reconcile_course_levels fired; course=' . $course_id . ' source=' . $src );
+		$this->log( '[TP-PMPRO] reconcile_course_levels fired; course=' . $course_id . ' source=' . $src );
 
 		// Step 0: Acquire short-lived lock to prevent concurrent double-runs
 		$lock_key = 'tp_pmpro_lock_' . $course_id;
 		if ( get_transient( $lock_key ) ) {
-			error_log( '[TP-PMPRO] reconcile_course_levels skipped (already running); course=' . $course_id );
+			$this->log( '[TP-PMPRO] reconcile_course_levels skipped (already running); course=' . $course_id );
 			return;
 		}
 		set_transient( $lock_key, 1, 5 ); // 5-second lock expiry
-		error_log( '[TP-PMPRO] reconcile_course_levels acquired_lock; course=' . $course_id );
+		$this->log( '[TP-PMPRO] reconcile_course_levels acquired_lock; course=' . $course_id );
 
 		try {
 			// Consume any pending plans saved while in draft
 			$pending = get_post_meta( $course_id, '_tutorpress_pmpro_pending_plans', true );
 			if ( is_array( $pending ) && ! empty( $pending ) ) {
-				error_log( '[TP-PMPRO] reconcile_course_levels pending_count=' . count( $pending ) . ' course=' . $course_id );
+				$this->log( '[TP-PMPRO] reconcile_course_levels pending_count=' . count( $pending ) . ' course=' . $course_id );
 				foreach ( $pending as $plan_params ) {
 					try {
 						// Map to PMPro level data and create level now that we're published
@@ -862,10 +862,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 							if ( ! is_array( $existing ) ) { $existing = array(); }
 							$existing[] = $level_id;
 							update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_unique( array_map( 'intval', $existing ) ) ) );
-							error_log( '[TP-PMPRO] reconcile_course_levels created_level_id=' . $level_id . ' owner=' . $course_id . ' assoc=ensured course=' . $course_id );
+							$this->log( '[TP-PMPRO] reconcile_course_levels created_level_id=' . $level_id . ' owner=' . $course_id . ' assoc=ensured course=' . $course_id );
 						}
 					} catch ( \Exception $e ) {
-						error_log( '[TP-PMPRO] reconcile_course_levels error creating pending plan: ' . $e->getMessage() . ' course=' . $course_id );
+						$this->log( '[TP-PMPRO] reconcile_course_levels error creating pending plan: ' . $e->getMessage() . ' course=' . $course_id );
 					}
 				}
 				// Clear pending
@@ -880,7 +880,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
 			$price = get_post_meta( $course_id, 'tutor_course_price', true );
 			
-			error_log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
+			$this->log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
 
 			// Branch handling: free / subscription / one_time / both
 			if ( 'free' === $price_type ) {
@@ -902,7 +902,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		} finally {
 			// Always cleanup lock, even if exception or early return
 			delete_transient( $lock_key );
-			error_log( '[TP-PMPRO] reconcile_course_levels released_lock; course=' . $course_id );
+			$this->log( '[TP-PMPRO] reconcile_course_levels released_lock; course=' . $course_id );
 		}
 	}
 
@@ -926,10 +926,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		foreach ( $ids as $lid ) {
 			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
-			error_log( '[TP-PMPRO] handle_free_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
+			$this->log( '[TP-PMPRO] handle_free_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
 		}
 		delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-		error_log( '[TP-PMPRO] handle_free_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
+		$this->log( '[TP-PMPRO] handle_free_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
 	}
 
 	/**
@@ -953,11 +953,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		foreach ( $one_time as $lid ) {
 			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
-			error_log( '[TP-PMPRO] handle_subscription_branch deleted_one_time_level_id=' . (int) $lid . ' course=' . $course_id );
+			$this->log( '[TP-PMPRO] handle_subscription_branch deleted_one_time_level_id=' . (int) $lid . ' course=' . $course_id );
 		}
 		// Persist remaining recurring IDs
 		update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
-		error_log( '[TP-PMPRO] handle_subscription_branch updated_course_levels; course=' . $course_id . ' recurring_count=' . count( $recurring ) );
+		$this->log( '[TP-PMPRO] handle_subscription_branch updated_course_levels; course=' . $course_id . ' recurring_count=' . count( $recurring ) );
 	}
 
 	/**
@@ -980,7 +980,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			}
 			foreach ( $recurring as $rid ) {
 				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $rid, true );
-				error_log( '[TP-PMPRO] handle_one_time_branch deleted_recurring_level_id=' . (int) $rid . ' course=' . $course_id );
+				$this->log( '[TP-PMPRO] handle_one_time_branch deleted_recurring_level_id=' . (int) $rid . ' course=' . $course_id );
 			}
 		}
 
@@ -1003,7 +1003,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				'billing_limit'   => 0,
 			);
 			$wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $level_id ), array( '%s', '%s', '%f', '%f', '%d', '%s', '%d' ), array( '%d' ) );
-			error_log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+			$this->log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
 		} else {
 			// No one-time level exists: create one with course price
 			if ( $regular_price > 0 ) {
@@ -1022,10 +1022,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 				$wpdb->insert( $wpdb->pmpro_membership_levels, $insert_data );
 				$level_id = (int) $wpdb->insert_id;
 				if ( $level_id > 0 ) {
-					error_log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+					$this->log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
 				}
 			} else {
-				error_log( '[TP-PMPRO] handle_one_time_branch no_price_set; course=' . $course_id );
+				$this->log( '[TP-PMPRO] handle_one_time_branch no_price_set; course=' . $course_id );
 				// No price set and no existing level; just clear meta
 				delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
 				return;
@@ -1037,22 +1037,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 				update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
 				update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
-				error_log( '[TP-PMPRO] handle_one_time_branch set_reverse_meta level_id=' . $level_id . ' course=' . $course_id );
+				$this->log( '[TP-PMPRO] handle_one_time_branch set_reverse_meta level_id=' . $level_id . ' course=' . $course_id );
 			}
 			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
 				require_once $this->path . 'includes/class-pmpro-association.php';
 			}
 			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
-			error_log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' course=' . $course_id );
+			$this->log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' course=' . $course_id );
 		}
 
 		// Step 4: Update course meta with final level ID(s)
 		if ( $level_id > 0 ) {
 			update_post_meta( $course_id, '_tutorpress_pmpro_levels', array( $level_id ) );
-			error_log( '[TP-PMPRO] handle_one_time_branch final_meta_update; course=' . $course_id . ' level_id=' . $level_id );
+			$this->log( '[TP-PMPRO] handle_one_time_branch final_meta_update; course=' . $course_id . ' level_id=' . $level_id );
 		} else {
 			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-			error_log( '[TP-PMPRO] handle_one_time_branch cleared_meta; course=' . $course_id );
+			$this->log( '[TP-PMPRO] handle_one_time_branch cleared_meta; course=' . $course_id );
 		}
 	}
 
@@ -1312,12 +1312,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 			// Schedule reconcile for each selected course
 			if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( $course_id ) ) ) {
 				wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( $course_id ) );
-				error_log( '[TP-PMPRO] Bulk reconcile scheduled for course=' . $course_id );
+				$this->log( '[TP-PMPRO] Bulk reconcile scheduled for course=' . $course_id );
 			}
 		}
 
 		$redirect_to = add_query_arg( 'reconcile_bulk_action', 'success', $redirect_to );
 		return $redirect_to;
+	}
+
+	/**
+	 * Log a message if TP_PMPRO_LOG is enabled.
+	 *
+	 * @param string $message The message to log.
+	 * @return void
+	 */
+	private function log( $message ) {
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+			error_log( $message );
+		}
 	}
 
 }

@@ -203,7 +203,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		);
 
 		} catch ( Exception $e ) {
-			error_log( 'TutorPress PMPro Subscriptions Controller: Failed to register routes - ' . $e->getMessage() );
+			$this->log( 'TutorPress PMPro Subscriptions Controller: Failed to register routes - ' . $e->getMessage() );
 		}
 	}
 
@@ -270,7 +270,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		// Filter plans by the course's current selling_option (if applicable)
 		$selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
-		error_log( '[TP-PMPRO] get_course_subscriptions filter: course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'empty' ) . ' plans_before_filter=' . count( $plans ) );
+		$this->log( '[TP-PMPRO] get_course_subscriptions filter: course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'empty' ) . ' plans_before_filter=' . count( $plans ) );
 		if ( ! empty( $plans ) && ! empty( $selling_option ) ) {
 			// Filter based on selling_option: only include matching payment types
 			$plans = array_filter( $plans, function( $plan ) use ( $selling_option ) {
@@ -286,13 +286,13 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 					// 'both' or other: show all plans
 					$match = true;
 				}
-				error_log( '[TP-PMPRO] get_course_subscriptions filter_item: plan_id=' . ( isset( $plan['id'] ) ? $plan['id'] : 'unknown' ) . ' plan_type=' . $plan_type . ' selling_option=' . $selling_option . ' match=' . ( $match ? 'yes' : 'no' ) );
+				$this->log( '[TP-PMPRO] get_course_subscriptions filter_item: plan_id=' . ( isset( $plan['id'] ) ? $plan['id'] : 'unknown' ) . ' plan_type=' . $plan_type . ' selling_option=' . $selling_option . ' match=' . ( $match ? 'yes' : 'no' ) );
 				return $match;
 			} );
 			// Re-index array to ensure clean structure
 			$plans = array_values( $plans );
 		}
-		error_log( '[TP-PMPRO] get_course_subscriptions filter: plans_after_filter=' . count( $plans ) );
+		$this->log( '[TP-PMPRO] get_course_subscriptions filter: plans_after_filter=' . count( $plans ) );
 
 		// If course is not published, also include any pending (queued) plans stored in meta
 		$status = get_post_status( (int) $course_id );
@@ -800,6 +800,18 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
         }
 
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $ordered_ids, __( 'Subscription plans reordered.', 'tutorpress-pmpro' ) ) );
+	}
+
+	/**
+	 * Log a message if TP_PMPRO_LOG is enabled.
+	 *
+	 * @param string $message The message to log.
+	 * @return void
+	 */
+	private function log( $message ) {
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+			error_log( $message );
+		}
 	}
 
 }
