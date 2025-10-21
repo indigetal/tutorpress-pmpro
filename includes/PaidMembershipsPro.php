@@ -74,6 +74,9 @@ class PaidMembershipsPro {
 			add_action( 'pmpro_after_checkout', array( $this, 'pmpro_after_checkout_enroll' ), 10, 2 );
 			// Unenroll on refunded orders when no other valid level still grants access
 			add_action( 'pmpro_order_status_refunded', array( $this, 'pmpro_order_status_refunded' ), 10, 2 );
+
+			// Phase 1: Membership-Only Mode filter and helpers
+			$this->wire_membership_only_mode_filter();
         }
     }
 
@@ -430,14 +433,28 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * PMPro save tutor settings
-	 *
-	 * @param int $level_id level id.
-	 *
-	 * @return void
-	 */
+     * PM Pro save tutor settings
+     *
+     * @param int $level_id level id.
+     *
+     * @return void
+     */
     public function pmpro_settings( $level_id ) {
+
         if ( 'pmpro_settings' !== Input::post( 'tutor_action' ) ) {
+            return;
+        }
+
+        // Admin-only gating: prevent non-admins from modifying membership model and highlight settings
+        if ( ! current_user_can( 'manage_options' ) ) {
+            // Log security audit trail
+            if ( function_exists( 'error_log' ) ) {
+                error_log( sprintf(
+                    '[TP-PMPRO] Unauthorized attempt to modify membership model for level %d by user %d',
+                    absint( $level_id ),
+                    get_current_user_id()
+                ) );
+            }
             return;
         }
 
@@ -464,7 +481,7 @@ class PaidMembershipsPro {
 	 */
     public function add_options( $attr ) {
         $attr['TUTORPRESS_PMPRO'] = array(
-            'label'    => __( 'PM Pro', 'tutorpress-pmpro' ),
+            'label'    => __( 'PMPro-TutorPress', 'tutorpress-pmpro' ),
             'slug'     => 'pm-pro',
             'desc'     => __( 'Paid Membership', 'tutorpress-pmpro' ),
             'template' => 'basic',
@@ -475,6 +492,14 @@ class PaidMembershipsPro {
                     'slug'       => 'pm_pro',
                     'block_type' => 'uniform',
                     'fields'     => array(
+                        array(
+                            'key'     => 'tutorpress_pmpro_membership_only_mode',
+                            'type'    => 'toggle_switch',
+                            'label'   => __( 'Membership-Only Mode', 'tutorpress-pmpro' ),
+                            'label_title' => '',
+                            'default' => 'off',
+                            'desc'    => __( 'Enable this to sell courses exclusively through membership plans. Individual course sales will be disabled.', 'tutorpress-pmpro' ),
+                        ),
                         array(
                             'key'     => 'pmpro_moneyback_day',
                             'type'    => 'number',
@@ -1240,6 +1265,107 @@ class PaidMembershipsPro {
 			}
 		}
 	}
+
+    /**
+     * Wire the global tutor_membership_only_mode filter.
+     * When PMPro is active, this filter returns the PMPro-local toggle value.
+     *
+     * @since 1.4.0
+     * @return void
+     */
+    private function wire_membership_only_mode_filter() {
+        add_filter( 'tutor_membership_only_mode', array( $this, 'filter_tutor_membership_only_mode' ) );
+    }
+
+    /**
+     * Filter callback for tutor_membership_only_mode.
+     * Returns the PMPro membership-only setting when PMPro is active.
+     * Validates that full-site membership levels exist before enforcing.
+     *
+     * @since 1.4.0
+     * @return bool
+     */
+    public function filter_tutor_membership_only_mode() {
+        // Only apply when PMPro is selected as the monetization engine
+        if ( ! $this->is_pmpro_enabled() ) {
+            // Fallback to native Tutor setting if PMPro is not active
+            return (bool) tutor_utils()->get_option( 'membership_only_mode', false );
+        }
+
+        // Read the PMPro-local toggle (toggle_switch saves 'on' or 'off' strings)
+        $toggle_value = tutor_utils()->get_option( 'tutorpress_pmpro_membership_only_mode', 'off' );
+        $toggle_enabled = ( 'on' === $toggle_value || $toggle_value === true );
+
+        // Only enforce if toggle is ON and at least one full-site level exists
+        if ( $toggle_enabled && $this->pmpro_has_full_site_level() ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if at least one PMPro level with full_website_membership model exists.
+     *
+     * @since 1.4.0
+     * @return bool
+     */
+    public static function pmpro_has_full_site_level() {
+        global $wpdb;
+
+        $count = $wpdb->get_var(
+            "SELECT COUNT(level_table.id)
+            FROM {$wpdb->pmpro_membership_levels} level_table 
+            INNER JOIN {$wpdb->pmpro_membership_levelmeta} meta 
+                ON level_table.id = meta.pmpro_membership_level_id 
+            WHERE 
+                meta.meta_key = 'TUTORPRESS_PMPRO_membership_model' AND 
+                meta.meta_value = 'full_website_membership' AND
+                level_table.id NOT IN (
+                    SELECT membership_id FROM {$wpdb->pmpro_memberships_users}
+                    WHERE status = 'inactive' AND date_cancelled IS NOT NULL
+                )"
+        );
+
+        return (int) $count > 0;
+    }
+
+    /**
+     * Get all active PMPro levels with full_website_membership model.
+     *
+     * @since 1.4.0
+     * @return array Array of level IDs
+     */
+    public static function pmpro_get_active_full_site_levels() {
+        global $wpdb;
+
+        $level_ids = $wpdb->get_col(
+            "SELECT DISTINCT level_table.id
+            FROM {$wpdb->pmpro_membership_levels} level_table 
+            INNER JOIN {$wpdb->pmpro_membership_levelmeta} meta 
+                ON level_table.id = meta.pmpro_membership_level_id 
+            WHERE 
+                meta.meta_key = 'TUTORPRESS_PMPRO_membership_model' AND 
+                meta.meta_value = 'full_website_membership'"
+        );
+
+        return is_array( $level_ids ) ? array_map( 'intval', $level_ids ) : array();
+    }
+
+    /**
+     * Wrapper to check if membership-only mode is enabled and validated.
+     * This wrapper ensures the toggle is only considered "enabled" when:
+     * 1. The toggle option is set to 'on'
+     * 2. At least one full-site membership level exists
+     *
+     * @since 1.4.0
+     * @return bool
+     */
+    public static function tutorpress_pmpro_membership_only_enabled() {
+        $toggle_value = tutor_utils()->get_option( 'tutorpress_pmpro_membership_only_mode', 'off' );
+        $toggle_enabled = ( 'on' === $toggle_value || $toggle_value === true );
+        return $toggle_enabled && self::pmpro_has_full_site_level();
+    }
 }
 
 
