@@ -202,13 +202,19 @@ class PaidMembershipsPro {
 
             // For all other cases in membership-only mode, show "View Pricing" button
             // This includes: logged-out users, users without membership, users without access
+            // has_course_access() returns:
+            // - true if user has access
+            // - false if no membership required (shouldn't happen in membership-only mode)
+            // - array of required levels if user doesn't have access
             $user_has_access = $this->has_course_access( $course_id );
-            if ( ! $user_has_access || $user_has_access === false ) {
-                return $this->render_membership_price_button();
+            
+            // Only show original HTML if user truly has access (returns exactly true)
+            if ( $user_has_access === true ) {
+                return $html;
             }
             
-            // If we reach here in membership-only mode, user has access - show original HTML
-            return $html;
+            // For all other cases (false, array, etc.), show "View Pricing" button
+            return $this->render_membership_price_button();
         }
 
         // Below this point: Hybrid mode (membership-only is OFF)
@@ -758,6 +764,13 @@ class PaidMembershipsPro {
 	 * @return string  html content to show on the enrollment section
 	 */
     public function pmpro_pricing( $html, $course_id ) {
+        // Phase 2 Fix: Free courses should ALWAYS show their normal "Free" enrollment box
+        // regardless of membership-only mode status
+        $is_free = get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free';
+        if ( $is_free ) {
+            return $html;
+        }
+        
         $is_enrolled       = tutor_utils()->is_enrolled();
         $has_course_access = tutor_utils()->has_user_course_content_access();
 
@@ -771,13 +784,123 @@ class PaidMembershipsPro {
             return $html;
         }
 
-        $required_levels = $this->has_course_access( $course_id );
-
-        if ( true === $required_levels || ! count( $required_levels ) ) {
-            // If has membership access, then no need membership pricing.
-            return $html;
+        // Determine which levels to show based on membership-only mode
+        $membership_only_enabled = self::tutorpress_pmpro_membership_only_enabled();
+        
+        if ( $membership_only_enabled ) {
+            // Phase 2: In membership-only mode, show ALL full-site membership levels
+            $required_levels = self::pmpro_get_active_full_site_levels();
+            
+            // Get full level objects
+            $level_objects = array();
+            foreach ( $required_levels as $level_id ) {
+                $level = pmpro_getLevel( $level_id );
+                if ( $level ) {
+                    $level_objects[] = $level;
+                }
+            }
+            $required_levels = $level_objects;
+            
+            // If no full-site levels exist, return original HTML (shouldn't happen if toggle validation works)
+            if ( empty( $required_levels ) ) {
+                return $html;
+            }
+        } else {
+            // Phase 2: In hybrid mode, determine which levels to show based on selling option
+            $selling_option = \TUTOR\Course::get_selling_option( $course_id );
+            
+            if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
+                // For 'membership' selling option, show full-site membership levels
+                $required_levels = self::pmpro_get_active_full_site_levels();
+                
+                // Get full level objects
+                $level_objects = array();
+                foreach ( $required_levels as $level_id ) {
+                    $level = pmpro_getLevel( $level_id );
+                    if ( $level ) {
+                        $level_objects[] = $level;
+                    }
+                }
+                $required_levels = $level_objects;
+                
+                if ( empty( $required_levels ) ) {
+                    return $html;
+                }
+            } elseif ( \TUTOR\Course::SELLING_OPTION_ALL === $selling_option ) {
+                // For 'all' selling option, we need to handle this differently
+                // For now, show full-site membership levels (individual pricing will be handled by Tutor's native template)
+                $required_levels = self::pmpro_get_active_full_site_levels();
+                
+                // Get full level objects
+                $level_objects = array();
+                foreach ( $required_levels as $level_id ) {
+                    $level = pmpro_getLevel( $level_id );
+                    if ( $level ) {
+                        $level_objects[] = $level;
+                    }
+                }
+                $required_levels = $level_objects;
+                
+                if ( empty( $required_levels ) ) {
+                    return $html;
+                }
+            } else {
+                // For other selling options (one_time, subscription, both),
+                // show COURSE-SPECIFIC PMPro levels (exclude full-site membership levels)
+                
+                // Get ALL levels associated with this course via pmpro_memberships_pages
+                global $wpdb;
+                $level_ids = array();
+                if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+                    $level_ids = $wpdb->get_col( $wpdb->prepare( 
+                        "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", 
+                        $course_id 
+                    ) );
+                }
+                
+                if ( empty( $level_ids ) ) {
+                    // No PMPro level associations found, return original HTML
+                    return $html;
+                }
+                
+                // Get full level objects
+                $required_levels = array();
+                foreach ( $level_ids as $lid ) {
+                    $level = pmpro_getLevel( $lid );
+                    if ( $level ) {
+                        $required_levels[] = $level;
+                    }
+                }
+                
+                if ( empty( $required_levels ) ) {
+                    return $html;
+                }
+                
+                // Filter out full-site and category-wise membership levels - only show course-specific levels
+                $course_specific_levels = array();
+                foreach ( $required_levels as $level ) {
+                    $level_id = is_object( $level ) ? $level->id : $level;
+                    $membership_model = get_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_membership_model', true );
+                    
+                    // Include level if it does NOT have a membership_model meta (course-specific)
+                    // OR if it has a model that is NOT full_website_membership or category_wise_membership
+                    if ( empty( $membership_model ) || 
+                         ( $membership_model !== 'full_website_membership' && 
+                           $membership_model !== 'category_wise_membership' ) ) {
+                        $course_specific_levels[] = $level;
+                    }
+                }
+                
+                if ( empty( $course_specific_levels ) ) {
+                    // All levels were full-site or category membership, return original HTML
+                    return $html;
+                }
+                
+                $required_levels = $course_specific_levels;
+            }
         }
-
+        
+        // Render membership pricing template with the appropriate levels
         $level_page_id  = apply_filters( 'TUTORPRESS_PMPRO_level_page_id', pmpro_getOption( 'levels_page_id' ) );
         $level_page_url = get_the_permalink( $level_page_id );
 
@@ -1350,15 +1473,31 @@ class PaidMembershipsPro {
      * @return string Modified HTML or original HTML.
      */
     public function show_pmpro_membership_plans( $html, $course_id ) {
-        // Get the effective selling option (respects membership-only mode)
-        $selling_option = $this->get_effective_selling_option( $course_id );
-
-        // If selling option is one-time only, keep the original template
-        if ( \TUTOR\Course::SELLING_OPTION_ONE_TIME === $selling_option ) {
+        // Phase 2 Fix: Always respect free courses - they should never show membership pricing
+        $is_free = get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free';
+        if ( $is_free ) {
             return $html;
         }
+        
+        // Phase 2 Fix: Only apply membership pricing logic if:
+        // 1. Membership-only mode is enabled, OR
+        // 2. The course selling option explicitly includes memberships ('membership' or 'all')
+        
+        $membership_only_enabled = self::tutorpress_pmpro_membership_only_enabled();
+        
+        if ( ! $membership_only_enabled ) {
+            // In hybrid mode, only show membership plans if course selling option is 'membership' or 'all'
+            $selling_option = \TUTOR\Course::get_selling_option( $course_id );
+            
+            // Only show PMPro membership pricing for courses configured with membership options
+            if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP !== $selling_option && 
+                 \TUTOR\Course::SELLING_OPTION_ALL !== $selling_option ) {
+                // For one_time, subscription, or both - return original HTML (shows individual pricing)
+                return $html;
+            }
+        }
 
-        // For all other selling options (subscription, membership, both, all),
+        // For membership-only mode OR courses with 'membership' or 'all' selling option,
         // show PMPro membership plans
         return $this->pmpro_pricing( $html, $course_id );
     }
