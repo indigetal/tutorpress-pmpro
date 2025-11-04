@@ -47,6 +47,7 @@ class PaidMembershipsPro {
 
         add_filter( 'tutor/course/single/entry-box/free', array( $this, 'pmpro_pricing' ), 10, 2 );
         add_filter( 'tutor/course/single/entry-box/is_enrolled', array( $this, 'pmpro_pricing' ), 10, 2 );
+        add_filter( 'tutor/course/single/entry-box/purchasable', array( $this, 'show_pmpro_membership_plans' ), 12, 2 );
         add_action( 'tutor/course/single/content/before/all', array( $this, 'pmpro_pricing_single_course' ), 100, 2 );
         add_filter( 'tutor/options/attr', array( $this, 'add_options' ) );
 
@@ -75,13 +76,17 @@ class PaidMembershipsPro {
 			// Unenroll on refunded orders when no other valid level still grants access
 			add_action( 'pmpro_order_status_refunded', array( $this, 'pmpro_order_status_refunded' ), 10, 2 );
 
-			// Phase 1: Membership-Only Mode filter and helpers
+			// Membership-Only Mode filter and helpers
 			$this->wire_membership_only_mode_filter();
+
+			// Frontend behavior overrides
+			add_filter( 'tutor_allow_guest_attempt_enrollment', array( $this, 'filter_allow_guest_attempt_enrollment' ), 11, 3 );
+			add_action( 'tutor_after_enrolled', array( $this, 'handle_after_enrollment_completed' ), 10, 3 );
         }
     }
 
     /**
-     * Initialize pricing-related filters for archive, dashboard, and single contexts (Step B).
+     * Initialize pricing-related filters for archive, dashboard, and single contexts.
      *
      * - Inject minimal PMPro price strings via get_tutor_course_price (priority 12)
      * - Ensure Tutor loop uses the 'tutor' price template wrappers so price markup renders
@@ -111,8 +116,6 @@ class PaidMembershipsPro {
 
         // Ensure loop uses Tutor monetization wrappers so our string renders inside native markup
         add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
-
-        // (Cleanup) Removed fallback injections and debug probes now that pricing renders reliably.
 
     }
 
@@ -162,6 +165,9 @@ class PaidMembershipsPro {
 
     /**
      * Replace the loop price block with PMPro minimal pricing when applicable.
+     * 
+     * When membership-only mode is enabled, show "View Pricing"
+     * button instead of normal price for users without access.
      *
      * @param string $html
      * @param int    $course_id
@@ -177,6 +183,35 @@ class PaidMembershipsPro {
             return $html;
         }
 
+        // Phase 2, Step 6: Membership-only mode loop price override
+        if ( self::tutorpress_pmpro_membership_only_enabled() ) {
+            // Respect public courses
+            if ( \TUTOR\Course_List::is_public( $course_id ) ) {
+                return $html;
+            }
+
+            // Respect free courses
+            if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
+                return $html;
+            }
+
+            // Keep enrollment display if user purchased this course individually (not via membership)
+            if ( tutor_utils()->is_enrolled( $course_id ) && ! $this->is_enrolled_by_pmpro_membership( $course_id ) ) {
+                return $html;
+            }
+
+            // For all other cases in membership-only mode, show "View Pricing" button
+            // This includes: logged-out users, users without membership, users without access
+            $user_has_access = $this->has_course_access( $course_id );
+            if ( ! $user_has_access || $user_has_access === false ) {
+                return $this->render_membership_price_button();
+            }
+            
+            // If we reach here in membership-only mode, user has access - show original HTML
+            return $html;
+        }
+
+        // Below this point: Hybrid mode (membership-only is OFF)
         // Respect public/free courses
         if ( get_post_meta( $course_id, '_tutor_is_public_course', true ) === 'yes' ) {
             return $html;
@@ -275,7 +310,7 @@ class PaidMembershipsPro {
 
 
     /**
-    * On PM Pro subscription expired, remove course access
+    * On PMPro subscription expired, remove course access
     *
     * @see https://www.paidmembershipspro.com/hook/pmpro_subscription_expired
     *
@@ -588,6 +623,11 @@ class PaidMembershipsPro {
         // Prepare data.
         $user_id           = null === $user_id ? get_current_user_id() : $user_id;
         $has_course_access = false;
+
+        // Phase 2: In membership-only mode, logged-out users have NO access
+        if ( self::tutorpress_pmpro_membership_only_enabled() && ! $user_id ) {
+            return false;
+        }
 
         // Get all membership levels of this user.
         $levels = $user_id ? pmpro_getMembershipLevelsForUser( $user_id ) : array();
@@ -1278,6 +1318,52 @@ class PaidMembershipsPro {
     }
 
     /**
+     * Get the effective selling option for a course, respecting membership-only mode.
+     * 
+     * When membership-only mode is enabled, override all courses
+     * to use SELLING_OPTION_MEMBERSHIP regardless of their individual settings.
+     *
+     * @since 1.4.0
+     * @param int $course_id Course ID.
+     * @return string Selling option constant.
+     */
+    public function get_effective_selling_option( $course_id ) {
+        // If membership-only mode is enabled, force MEMBERSHIP selling option
+        if ( self::tutorpress_pmpro_membership_only_enabled() ) {
+            return \TUTOR\Course::SELLING_OPTION_MEMBERSHIP;
+        }
+
+        // Otherwise return the course's actual selling option
+        return \TUTOR\Course::get_selling_option( $course_id );
+    }
+
+    /**
+     * Show PMPro membership plans in entry box when appropriate.
+     * 
+     * Override entry box to show membership plans when:
+     * - Membership-only mode is enabled, OR
+     * - Course selling option is not one-time purchase only
+     *
+     * @since 1.4.0
+     * @param string $html Original HTML content.
+     * @param int    $course_id Course ID.
+     * @return string Modified HTML or original HTML.
+     */
+    public function show_pmpro_membership_plans( $html, $course_id ) {
+        // Get the effective selling option (respects membership-only mode)
+        $selling_option = $this->get_effective_selling_option( $course_id );
+
+        // If selling option is one-time only, keep the original template
+        if ( \TUTOR\Course::SELLING_OPTION_ONE_TIME === $selling_option ) {
+            return $html;
+        }
+
+        // For all other selling options (subscription, membership, both, all),
+        // show PMPro membership plans
+        return $this->pmpro_pricing( $html, $course_id );
+    }
+
+    /**
      * Filter callback for tutor_membership_only_mode.
      * Returns the PMPro membership-only setting when PMPro is active.
      * Validates that full-site membership levels exist before enforcing.
@@ -1320,11 +1406,7 @@ class PaidMembershipsPro {
                 ON level_table.id = meta.pmpro_membership_level_id 
             WHERE 
                 meta.meta_key = 'TUTORPRESS_PMPRO_membership_model' AND 
-                meta.meta_value = 'full_website_membership' AND
-                level_table.id NOT IN (
-                    SELECT membership_id FROM {$wpdb->pmpro_memberships_users}
-                    WHERE status = 'inactive' AND date_cancelled IS NOT NULL
-                )"
+                meta.meta_value = 'full_website_membership'"
         );
 
         return (int) $count > 0;
@@ -1365,6 +1447,182 @@ class PaidMembershipsPro {
         $toggle_value = tutor_utils()->get_option( 'tutorpress_pmpro_membership_only_mode', 'off' );
         $toggle_enabled = ( 'on' === $toggle_value || $toggle_value === true );
         return $toggle_enabled && self::pmpro_has_full_site_level();
+    }
+
+    /**
+     * Check if user is enrolled in a course via PMPro membership (not individual purchase).
+     * 
+     * Helper to determine if enrollment was via membership plan.
+     * This helps preserve individual purchase enrollments in membership-only mode.
+     *
+     * @since 1.4.0
+     * @param int $course_id Course ID.
+     * @param int|null $user_id User ID (defaults to current user).
+     * @return bool True if enrolled via PMPro membership, false otherwise.
+     */
+    public function is_enrolled_by_pmpro_membership( $course_id, $user_id = null ) {
+        if ( ! $user_id ) {
+            $user_id = get_current_user_id();
+        }
+
+        if ( ! $user_id || ! tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
+            return false;
+        }
+
+        // Check if user has any active PMPro membership levels
+        if ( ! function_exists( 'pmpro_hasMembershipLevel' ) ) {
+            return false;
+        }
+
+        // If user has any membership level, consider them enrolled via membership
+        // This is a simplified check; could be enhanced to verify specific level access
+        return pmpro_hasMembershipLevel();
+    }
+
+    /**
+     * Render the "View Pricing" button for membership-only mode in course loops.
+     * 
+     * Displays a button linking to the PMPro levels page.
+     *
+     * @since 1.4.0
+     * @return string HTML for the pricing button.
+     */
+    public function render_membership_price_button() {
+        $level_page_id = apply_filters( 'TUTORPRESS_PMPRO_level_page_id', pmpro_getOption( 'levels_page_id' ) );
+        $level_page_url = get_permalink( $level_page_id );
+
+        if ( ! $level_page_url ) {
+            $level_page_url = home_url( '/membership-levels/' );
+        }
+
+        ob_start();
+        ?>
+        <div class="tutor-d-flex tutor-align-center">
+            <a href="<?php echo esc_url( $level_page_url ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block">
+                <?php esc_html_e( 'View Pricing', 'tutorpress-pmpro' ); ?>
+            </a>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Filter to block guest enrollment attempts when membership-only mode is enabled.
+     * 
+     * When membership-only mode is ON, guests cannot enroll in courses.
+     * They must register and purchase a membership first.
+     *
+     * @since 1.4.0
+     * @param bool $allowed Whether guest enrollment is allowed.
+     * @param int  $course_id Course ID.
+     * @param int  $user_id User ID (0 for guests).
+     * @return bool False if membership-only mode is enabled, otherwise original value.
+     */
+    public function filter_allow_guest_attempt_enrollment( $allowed, $course_id, $user_id ) {
+        if ( self::tutorpress_pmpro_membership_only_enabled() ) {
+            return false;
+        }
+
+        return $allowed;
+    }
+
+    /**
+     * Handle enrollment flagging after enrollment is completed.
+     * 
+     * Mark enrollments as PMPro membership-based when appropriate.
+     * This helps track which enrollments came from membership plans vs individual purchases.
+     *
+     * @since 1.4.0
+     * @param int $course_id Course ID.
+     * @param int $user_id User ID.
+     * @param int $enrolled_id Enrollment ID.
+     * @return void
+     */
+    public function handle_after_enrollment_completed( $course_id, $user_id, $enrolled_id ) {
+        $membership_enrollment_flag_required = false;
+
+        // For membership-only mode: flag all enrollments as membership-based
+        if ( self::tutorpress_pmpro_membership_only_enabled() ) {
+            $membership_enrollment_flag_required = true;
+        }
+
+        // For hybrid mode: check if this enrollment is via PMPro membership
+        // (user has active membership level)
+        if ( ! $membership_enrollment_flag_required && function_exists( 'pmpro_hasMembershipLevel' ) ) {
+            if ( pmpro_hasMembershipLevel( null, $user_id ) ) {
+                $membership_enrollment_flag_required = true;
+            }
+        }
+
+        if ( $membership_enrollment_flag_required ) {
+            // Get user's active PMPro membership levels
+            $user_levels = function_exists( 'pmpro_getMembershipLevelsForUser' ) 
+                ? pmpro_getMembershipLevelsForUser( $user_id ) 
+                : array();
+
+            if ( ! empty( $user_levels ) ) {
+                // Get the first active level (could be enhanced to find the specific level that grants access)
+                $level = is_array( $user_levels ) ? reset( $user_levels ) : null;
+                $level_id = $level && isset( $level->id ) ? (int) $level->id : 0;
+
+                if ( $level_id > 0 ) {
+                    // Mark this enrollment as PMPro membership-based
+                    // Store the level ID in enrollment meta for tracking
+                    update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
+                    update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
+
+                    // Handle bundle courses if Course Bundle addon is enabled
+                    if ( tutor_utils()->is_addon_enabled( 'course-bundle' ) && 
+                         function_exists( 'tutor' ) && 
+                         isset( tutor()->bundle_post_type ) && 
+                         tutor()->bundle_post_type === get_post_type( $course_id ) ) {
+                        
+                        $this->handle_bundle_course_membership_enrollment( $course_id, $user_id, $level_id );
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle auto-enrollment in bundle courses for membership enrollments.
+     * 
+     * When a user enrolls in a bundle via membership,
+     * automatically enroll them in all courses within the bundle.
+     *
+     * @since 1.4.0
+     * @param int $bundle_id Bundle ID.
+     * @param int $user_id User ID.
+     * @param int $level_id PMPro level ID.
+     * @return void
+     */
+    private function handle_bundle_course_membership_enrollment( $bundle_id, $user_id, $level_id ) {
+        // Check if BundleModel class exists (from Course Bundle addon)
+        if ( ! class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
+            return;
+        }
+
+        $bundle_course_ids = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_course_ids( $bundle_id );
+        
+        foreach ( $bundle_course_ids as $bundle_course_id ) {
+            // Check if user has access to this course via their membership
+            $has_access = $this->has_course_access( $bundle_course_id, $user_id );
+            
+            if ( $has_access ) {
+                // Auto-enroll in the bundle course
+                add_filter( 'tutor_enroll_data', function( $enroll_data ) {
+                    return array_merge( $enroll_data, array( 'post_status' => 'completed' ) );
+                } );
+                
+                $course_enrolled_id = tutor_utils()->do_enroll( $bundle_course_id, 0, $user_id, false );
+                
+                if ( $course_enrolled_id ) {
+                    // Mark this course enrollment as membership-based too
+                    update_post_meta( $course_enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
+                    update_post_meta( $course_enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
+                }
+            }
+        }
     }
 }
 
