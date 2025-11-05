@@ -308,7 +308,26 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 
-		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $plans, __( 'PMPro membership levels retrieved.', 'tutorpress-pmpro' ) ) );
+		// Add membership mode metadata for frontend (Phase 3 integration)
+		$metadata = array(
+			'has_full_site_levels' => false,
+			'membership_only_mode' => false,
+		);
+
+		// Check if PaidMembershipsPro class is available
+		if ( class_exists( '\TUTORPRESS_PMPRO\PaidMembershipsPro' ) ) {
+			// Use static methods to get membership mode status
+			$metadata['has_full_site_levels'] = \TUTORPRESS_PMPRO\PaidMembershipsPro::pmpro_has_full_site_level();
+			$metadata['membership_only_mode'] = \TUTORPRESS_PMPRO\PaidMembershipsPro::tutorpress_pmpro_membership_only_enabled();
+		}
+
+		// Return plans with metadata
+		$response_data = array(
+			'plans'    => $plans,
+			'metadata' => $metadata,
+		);
+
+		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $response_data, __( 'PMPro membership levels retrieved.', 'tutorpress-pmpro' ) ) );
 	}
 
 	/**
@@ -363,7 +382,26 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 
-		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $plans, __( 'PMPro membership levels retrieved for bundle.', 'tutorpress-pmpro' ) ) );
+		// Add membership mode metadata for frontend (Phase 3 integration)
+		$metadata = array(
+			'has_full_site_levels' => false,
+			'membership_only_mode' => false,
+		);
+
+		// Check if PaidMembershipsPro class is available
+		if ( class_exists( '\TUTORPRESS_PMPRO\PaidMembershipsPro' ) ) {
+			// Use static methods to get membership mode status
+			$metadata['has_full_site_levels'] = \TUTORPRESS_PMPRO\PaidMembershipsPro::pmpro_has_full_site_level();
+			$metadata['membership_only_mode'] = \TUTORPRESS_PMPRO\PaidMembershipsPro::tutorpress_pmpro_membership_only_enabled();
+		}
+
+		// Return plans with metadata
+		$response_data = array(
+			'plans'    => $plans,
+			'metadata' => $metadata,
+		);
+
+		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $response_data, __( 'PMPro membership levels retrieved for bundle.', 'tutorpress-pmpro' ) ) );
 	}
 
 	/**
