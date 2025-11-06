@@ -880,25 +880,29 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
 			$price = get_post_meta( $course_id, 'tutor_course_price', true );
 			
-			$this->log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
+		$this->log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
 
-			// Branch handling: free / subscription / one_time / both
-			if ( 'free' === $price_type ) {
-				$this->handle_free_branch( $course_id, $state );
-				return;
-			}
-			if ( 'subscription' === $selling_option ) {
-				$this->handle_subscription_branch( $course_id, $state );
-				return;
-			}
-			if ( 'one_time' === $selling_option ) {
-				$this->handle_one_time_branch( $course_id, $state );
-				return;
-			}
-			// Default: ensure meta matches valid IDs (covers 'both' and other cases)
-			if ( ! empty( $state['valid_ids'] ) ) {
-				update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
-			}
+		// Branch handling: free / membership / subscription / one_time / both / all
+		if ( 'free' === $price_type ) {
+			$this->handle_free_branch( $course_id, $state );
+			return;
+		}
+		if ( 'membership' === $selling_option ) {
+			$this->handle_membership_branch( $course_id, $state );
+			return;
+		}
+		if ( 'subscription' === $selling_option ) {
+			$this->handle_subscription_branch( $course_id, $state );
+			return;
+		}
+		if ( 'one_time' === $selling_option ) {
+			$this->handle_one_time_branch( $course_id, $state );
+			return;
+		}
+		// Default: ensure meta matches valid IDs (covers 'both' and 'all')
+		if ( ! empty( $state['valid_ids'] ) ) {
+			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
+		}
 		} finally {
 			// Always cleanup lock, even if exception or early return
 			delete_transient( $lock_key );
@@ -1054,6 +1058,38 @@ if ( ! defined( 'ABSPATH' ) ) {
 			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
 			$this->log( '[TP-PMPRO] handle_one_time_branch cleared_meta; course=' . $course_id );
 		}
+	}
+
+	/**
+	 * Handle Membership-only branch: delete all course-specific PMPro levels.
+	 * This is used when selling_option is set to 'membership' (full-site membership only).
+	 * 
+	 * ⚠️ IMPORTANT: This only deletes course-specific levels. Full-site membership levels
+	 * (global) and category-wise membership levels are NEVER touched.
+	 *
+	 * @param int   $course_id
+	 * @param array $state
+	 * @return void
+	 */
+	private function handle_membership_branch( $course_id, $state = array() ) {
+		$course_id = (int) $course_id;
+		if ( ! is_array( $state ) ) {
+			$state = array();
+		}
+		$ids = isset( $state['valid_ids'] ) ? $state['valid_ids'] : array();
+		if ( empty( $ids ) ) {
+			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+			return;
+		}
+		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+		}
+		foreach ( $ids as $lid ) {
+			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
+			$this->log( '[TP-PMPRO] handle_membership_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
+		}
+		delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+		$this->log( '[TP-PMPRO] handle_membership_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
 	}
 
 	/**
