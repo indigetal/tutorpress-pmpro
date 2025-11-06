@@ -1574,18 +1574,20 @@ class PaidMembershipsPro {
     }
 
     /**
-     * Wrapper to check if membership-only mode is enabled and validated.
-     * This wrapper ensures the toggle is only considered "enabled" when:
-     * 1. The toggle option is set to 'on'
-     * 2. At least one full-site membership level exists
+     * Check if membership-only mode is enabled.
+     * 
+     * Returns true if the membership-only mode setting is enabled.
+     * Note: This ONLY checks if the setting is enabled, NOT whether full-site
+     * membership levels exist. The existence of levels should be validated
+     * separately in the UI (has_full_site_levels metadata).
      *
      * @since 1.4.0
-     * @return bool
+     * @return bool True if membership-only mode is enabled, false otherwise.
      */
     public static function tutorpress_pmpro_membership_only_enabled() {
         $toggle_value = tutor_utils()->get_option( 'tutorpress_pmpro_membership_only_mode', 'off' );
         $toggle_enabled = ( 'on' === $toggle_value || $toggle_value === true );
-        return $toggle_enabled && self::pmpro_has_full_site_level();
+        return $toggle_enabled;
     }
 
     /**
