@@ -899,7 +899,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$this->handle_one_time_branch( $course_id, $state );
 			return;
 		}
-		// Default: ensure meta matches valid IDs (covers 'both' and 'all')
+		if ( 'both' === $selling_option || 'all' === $selling_option ) {
+			$this->handle_both_and_all_branch( $course_id, $state );
+			return;
+		}
+		// Default: ensure meta matches valid IDs (fallback for undefined selling options)
 		if ( ! empty( $state['valid_ids'] ) ) {
 			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
 		}
@@ -1090,6 +1094,81 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
 		$this->log( '[TP-PMPRO] handle_membership_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
+	}
+
+	/**
+	 * Handle Both and All branch: ensure both one-time and subscription levels coexist.
+	 * 
+	 * This handler serves two selling options:
+	 * - 'both' (Subscription or one-time purchase): Individual course options only
+	 * - 'all' (Everything): Individual options + full-site membership (admin-managed)
+	 * 
+	 * Backend reconciliation logic is identical for both:
+	 * - Auto-creates one-time level if missing (when price is set)
+	 * - Preserves all existing subscription plans
+	 * - Does NOT delete any levels
+	 * 
+	 * Note: Full-site membership validation for 'all' happens in frontend (TutorPress core).
+	 * This method only manages course-specific one-time and subscription levels.
+	 *
+	 * @param int   $course_id
+	 * @param array $state
+	 * @return void
+	 */
+	private function handle_both_and_all_branch( $course_id, $state = array() ) {
+		$course_id = (int) $course_id;
+		$one_time = isset( $state['one_time_ids'] ) ? (array) $state['one_time_ids'] : array();
+		$recurring = isset( $state['recurring_ids'] ) ? (array) $state['recurring_ids'] : array();
+		
+		// If no one-time level exists, auto-create one (if price is set)
+		if ( empty( $one_time ) ) {
+			$regular_price = get_post_meta( $course_id, 'tutor_course_price', true );
+			$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
+			
+			if ( $regular_price > 0 ) {
+				global $wpdb;
+				$insert_data = array(
+					'name'            => get_the_title( $course_id ) . ' (One-time)',
+					'description'     => get_post_field( 'post_excerpt', $course_id ) ?: '',
+					'initial_payment' => $regular_price,
+					'billing_amount'  => 0,
+					'cycle_number'    => 0,
+					'cycle_period'    => '',
+					'billing_limit'   => 0,
+					'trial_limit'     => 0,
+					'trial_amount'    => 0.0,
+				);
+				$wpdb->insert( $wpdb->pmpro_membership_levels, $insert_data );
+				$level_id = (int) $wpdb->insert_id;
+				
+				if ( $level_id > 0 ) {
+					// Set reverse ownership meta
+					if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+						update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
+						update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
+					}
+					// Ensure association
+					if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
+						require_once $this->path . 'includes/class-pmpro-association.php';
+					}
+					\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
+					
+					$one_time[] = $level_id;
+					$this->log( '[TP-PMPRO] handle_both_and_all_branch created_one_time_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+				}
+			} else {
+				$this->log( '[TP-PMPRO] handle_both_and_all_branch skipped_one_time_creation (no price set); course=' . $course_id );
+			}
+		} else {
+			$this->log( '[TP-PMPRO] handle_both_and_all_branch one_time_level_exists; course=' . $course_id . ' level_id=' . $one_time[0] );
+		}
+		
+		// Update meta with all valid IDs (one-time + recurring)
+		$all_ids = array_values( array_unique( array_map( 'intval', array_merge( $one_time, $recurring ) ) ) );
+		if ( ! empty( $all_ids ) ) {
+			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $all_ids );
+		}
+		$this->log( '[TP-PMPRO] handle_both_and_all_branch updated_meta; course=' . $course_id . ' one_time_count=' . count( $one_time ) . ' recurring_count=' . count( $recurring ) . ' total=' . count( $all_ids ) );
 	}
 
 	/**
