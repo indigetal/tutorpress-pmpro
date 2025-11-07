@@ -610,7 +610,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 
 		// Extract context from REST request
-		$so_keys = array( 'selling_option', '_tutor_course_selling_option' );
+		$so_keys = array( 'selling_option', 'tutor_course_selling_option' );
 		$pt_keys = array( 'price_type', 'tutor_course_price_type', '_tutor_course_price_type' );
 		$price_keys = array( 'price', 'tutor_course_price' );
 		$so = null; $pt = null; $price = null;
@@ -620,9 +620,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 			foreach ( $price_keys as $k ) { if ( null === $price ) { $price = $request->get_param( $k ); } }
 		}
 		
-		// Fallback to post meta if not in request
+		// Fallback to post meta if not in request (use standard Tutor Core meta key)
 		if ( null === $so ) {
-			$so = get_post_meta( $course_id, '_tutor_course_selling_option', true );
+			$so = get_post_meta( $course_id, 'tutor_course_selling_option', true );
 		}
 		if ( null === $pt ) {
 			$pt = get_post_meta( $course_id, '_tutor_course_price_type', true );
@@ -872,13 +872,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 				delete_post_meta( $course_id, '_tutorpress_pmpro_pending_plans' );
 			}
 
-			// Step 2: Association discovery and context extraction
-			$state = $this->get_course_pmpro_state( $course_id, array( 'source' => $src ) );
-			
-			// Read course pricing context from post meta
-			$selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
-			$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
-			$price = get_post_meta( $course_id, 'tutor_course_price', true );
+		// Step 2: Association discovery and context extraction
+		$state = $this->get_course_pmpro_state( $course_id, array( 'source' => $src ) );
+		
+		// Read course pricing context from post meta (use standard Tutor Core meta keys)
+		$selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
+		$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
+		$price = get_post_meta( $course_id, 'tutor_course_price', true );
 			
 		$this->log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
 
@@ -1252,8 +1252,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 
-		// Check selling_option value
-		$selling_option = get_post_meta( $object_id, '_tutor_course_selling_option', true );
+		// Check selling_option value (use standard Tutor Core meta key)
+		$selling_option = get_post_meta( $object_id, 'tutor_course_selling_option', true );
 		// We handle two cases here:
 		// - one_time: ensure a single one-time level exists and remove recurring ones
 		// - subscription: remove any one-time levels (keep recurring), don't auto-create

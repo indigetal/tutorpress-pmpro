@@ -807,17 +807,7 @@ class PaidMembershipsPro {
             }
         } else {
             // Phase 2: In hybrid mode, determine which levels to show based on selling option
-            
-            // CRITICAL FIX: Read from the meta key that TutorPress actually writes to.
-            // TutorPress (Gutenberg) uses '_tutor_course_selling_option' (with underscore prefix)
-            // but Tutor Core's get_selling_option() reads 'tutor_course_selling_option' (without prefix)
-            // which may contain stale data. We need to read the correct, current value.
-            $selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
-            
-            // Fallback to non-prefixed if prefixed doesn't exist (backward compatibility)
-            if ( empty( $selling_option ) ) {
-                $selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
-            }
+            $selling_option = \TUTOR\Course::get_selling_option( $course_id );
             
             if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
                 // For 'membership' selling option, show full-site membership levels
