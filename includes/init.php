@@ -998,28 +998,29 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
 
 		if ( ! empty( $one_time ) ) {
-			// One-time level(s) exist: update the first one with current price
+			// One-time level(s) exist: update the first one
+			// NOTE: initial_payment is handled by handle_sale_price_for_one_time() to support sales
 			$level_id = (int) $one_time[0];
 			global $wpdb;
 			$update_data = array(
 				'name'            => get_the_title( $course_id ) . ' (One-time)',
 				'description'     => get_post_field( 'post_excerpt', $course_id ) ?: '',
-				'initial_payment' => $regular_price,
 				'billing_amount'  => 0,
 				'cycle_number'    => 0,
 				'cycle_period'    => '',
 				'billing_limit'   => 0,
 			);
-			$wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $level_id ), array( '%s', '%s', '%f', '%f', '%d', '%s', '%d' ), array( '%d' ) );
-			$this->log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+			$wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $level_id ), array( '%s', '%s', '%f', '%d', '%s', '%d' ), array( '%d' ) );
+			$this->log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' course=' . $course_id . ' (initial_payment handled by sale_price logic)' );
 		} else {
-			// No one-time level exists: create one with course price
+			// No one-time level exists: create one
+			// NOTE: initial_payment is handled by handle_sale_price_for_one_time() to support sales
 			if ( $regular_price > 0 ) {
 				global $wpdb;
 				$insert_data = array(
 					'name'            => get_the_title( $course_id ) . ' (One-time)',
 					'description'     => get_post_field( 'post_excerpt', $course_id ) ?: '',
-					'initial_payment' => $regular_price,
+					'initial_payment' => 0,  // Temporary, will be set by handle_sale_price_for_one_time()
 					'billing_amount'  => 0,
 					'cycle_number'    => 0,
 					'cycle_period'    => '',
@@ -1030,7 +1031,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				$wpdb->insert( $wpdb->pmpro_membership_levels, $insert_data );
 				$level_id = (int) $wpdb->insert_id;
 				if ( $level_id > 0 ) {
-					$this->log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+					$this->log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' course=' . $course_id . ' (initial_payment will be set by sale_price logic)' );
 				}
 			} else {
 				$this->log( '[TP-PMPRO] handle_one_time_branch no_price_set; course=' . $course_id );
@@ -1052,6 +1053,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 			}
 			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 			$this->log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' course=' . $course_id );
+			
+			// Step 3.5: Handle sale price for one-time purchase
+			$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
 		}
 
 		// Step 4: Update course meta with final level ID(s)
@@ -1061,6 +1065,75 @@ if ( ! defined( 'ABSPATH' ) ) {
 		} else {
 			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
 			$this->log( '[TP-PMPRO] handle_one_time_branch cleared_meta; course=' . $course_id );
+		}
+	}
+
+	/**
+	 * Handle sale price storage for one-time purchase levels.
+	 * 
+	 * Implements PMPro sale price pattern:
+	 * 1. When sale active: level.initial_payment = sale_price, store regular_price in meta
+	 * 2. When no sale: level.initial_payment = regular_price, clear sale meta
+	 * 
+	 * This ensures PMPro charges the sale price while maintaining both prices for display.
+	 *
+	 * @since 1.5.0
+	 * @param int   $course_id      Course ID
+	 * @param int   $level_id       PMPro level ID
+	 * @param float $regular_price  Regular price for validation
+	 * @return void
+	 */
+	private function handle_sale_price_for_one_time( $course_id, $level_id, $regular_price ) {
+		if ( ! function_exists( 'update_pmpro_membership_level_meta' ) || ! function_exists( 'delete_pmpro_membership_level_meta' ) ) {
+			return;
+		}
+
+		global $wpdb;
+
+		// Read sale price from course meta
+		$sale_price = get_post_meta( $course_id, 'tutor_course_sale_price', true );
+		$sale_price = ! empty( $sale_price ) ? floatval( $sale_price ) : 0.0;
+
+		// Validate sale price
+		$is_valid_sale = ( $sale_price > 0 && $sale_price < $regular_price );
+
+		if ( $is_valid_sale ) {
+			// Update level's initial_payment to sale price (so PMPro charges the sale price)
+			$wpdb->update(
+				$wpdb->pmpro_membership_levels,
+				array( 'initial_payment' => $sale_price ),
+				array( 'id' => $level_id ),
+				array( '%f' ),
+				array( '%d' )
+			);
+
+			// Store regular price in meta (for display with strikethrough)
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', $regular_price );
+			
+			// Store sale price in meta (for Gutenberg editing)
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', $sale_price );
+			
+			$this->log( '[TP-PMPRO] applied_sale_price level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price . ' initial_payment_updated=1' );
+		} else {
+			// No valid sale price: restore regular price to initial_payment
+			$wpdb->update(
+				$wpdb->pmpro_membership_levels,
+				array( 'initial_payment' => $regular_price ),
+				array( 'id' => $level_id ),
+				array( '%f' ),
+				array( '%d' )
+			);
+
+			// Clean up sale price meta
+			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price' );
+			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price' );
+			
+			if ( $sale_price > 0 ) {
+				// Log validation failure for debugging
+				$this->log( '[TP-PMPRO] invalid_sale_price level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price . ' reason=sale_must_be_less_than_regular initial_payment_restored=1' );
+			} else {
+				$this->log( '[TP-PMPRO] cleared_sale_price level_id=' . $level_id . ' course=' . $course_id . ' initial_payment_restored=' . $regular_price );
+			}
 		}
 	}
 
