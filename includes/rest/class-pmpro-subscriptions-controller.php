@@ -34,59 +34,47 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 */
 	public function register_routes() {
 		try {
-			// Get subscription plans for a course
-			register_rest_route(
-				$this->namespace,
-				'/courses/(?P<course_id>[\d]+)/subscriptions',
+		// Get subscription plans for a course
+		register_rest_route(
+			$this->namespace,
+			'/courses/(?P<course_id>[\d]+)/subscriptions',
+			[
 				[
-					[
-						'methods' => WP_REST_Server::READABLE,
-						'callback' => [ $this, 'get_course_subscriptions' ],
-						'permission_callback' => function( $request ) {
-							$course_id = (int) $request->get_param( 'course_id' );
-							if ( $course_id && current_user_can( 'edit_post', $course_id ) ) {
-								return true;
-							}
-							return $this->check_permission( $request );
-						},
-						'args' => [
-							'course_id' => [
-								'required' => true,
-								'type' => 'integer',
-								'sanitize_callback' => 'absint',
-								'description' => __( 'The ID of the course to get subscription plans for.', 'tutorpress-pmpro' ),
-							],
+					'methods' => WP_REST_Server::READABLE,
+					'callback' => [ $this, 'get_course_subscriptions' ],
+					'permission_callback' => '__return_true', // Public read access - needed for frontend pricing display
+					'args' => [
+						'course_id' => [
+							'required' => true,
+							'type' => 'integer',
+							'sanitize_callback' => 'absint',
+							'description' => __( 'The ID of the course to get subscription plans for.', 'tutorpress-pmpro' ),
 						],
 					],
-				]
-			);
+				],
+			]
+		);
 
-			// Get subscription plans for a bundle
-			register_rest_route(
-				$this->namespace,
-				'/bundles/(?P<bundle_id>[\d]+)/subscriptions',
+		// Get subscription plans for a bundle
+		register_rest_route(
+			$this->namespace,
+			'/bundles/(?P<bundle_id>[\d]+)/subscriptions',
+			[
 				[
-					[
-						'methods' => WP_REST_Server::READABLE,
-						'callback' => [ $this, 'get_bundle_subscriptions' ],
-						'permission_callback' => function( $request ) {
-							$bundle_id = (int) $request->get_param( 'bundle_id' );
-							if ( $bundle_id && current_user_can( 'edit_post', $bundle_id ) ) {
-								return true;
-							}
-							return $this->check_permission( $request );
-						},
-						'args' => [
-							'bundle_id' => [
-								'required' => true,
-								'type' => 'integer',
-								'sanitize_callback' => 'absint',
-								'description' => __( 'The ID of the bundle to get subscription plans for.', 'tutorpress-pmpro' ),
-							],
+					'methods' => WP_REST_Server::READABLE,
+					'callback' => [ $this, 'get_bundle_subscriptions' ],
+					'permission_callback' => '__return_true', // Public read access - needed for frontend pricing display
+					'args' => [
+						'bundle_id' => [
+							'required' => true,
+							'type' => 'integer',
+							'sanitize_callback' => 'absint',
+							'description' => __( 'The ID of the bundle to get subscription plans for.', 'tutorpress-pmpro' ),
 						],
 					],
-				]
-			);
+				],
+			]
+		);
 
 			// Create new subscription plan (course or bundle)
 			register_rest_route(

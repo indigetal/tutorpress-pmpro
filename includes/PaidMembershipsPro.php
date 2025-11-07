@@ -807,7 +807,17 @@ class PaidMembershipsPro {
             }
         } else {
             // Phase 2: In hybrid mode, determine which levels to show based on selling option
-            $selling_option = \TUTOR\Course::get_selling_option( $course_id );
+            
+            // CRITICAL FIX: Read from the meta key that TutorPress actually writes to.
+            // TutorPress (Gutenberg) uses '_tutor_course_selling_option' (with underscore prefix)
+            // but Tutor Core's get_selling_option() reads 'tutor_course_selling_option' (without prefix)
+            // which may contain stale data. We need to read the correct, current value.
+            $selling_option = get_post_meta( $course_id, '_tutor_course_selling_option', true );
+            
+            // Fallback to non-prefixed if prefixed doesn't exist (backward compatibility)
+            if ( empty( $selling_option ) ) {
+                $selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
+            }
             
             if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
                 // For 'membership' selling option, show full-site membership levels
@@ -1473,32 +1483,21 @@ class PaidMembershipsPro {
      * @return string Modified HTML or original HTML.
      */
     public function show_pmpro_membership_plans( $html, $course_id ) {
-        // Phase 2 Fix: Always respect free courses - they should never show membership pricing
+        // Always respect free courses - they should never show PMPro pricing
         $is_free = get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free';
         if ( $is_free ) {
             return $html;
         }
         
-        // Phase 2 Fix: Only apply membership pricing logic if:
-        // 1. Membership-only mode is enabled, OR
-        // 2. The course selling option explicitly includes memberships ('membership' or 'all')
-        
-        $membership_only_enabled = self::tutorpress_pmpro_membership_only_enabled();
-        
-        if ( ! $membership_only_enabled ) {
-            // In hybrid mode, only show membership plans if course selling option is 'membership' or 'all'
-            $selling_option = \TUTOR\Course::get_selling_option( $course_id );
-            
-            // Only show PMPro membership pricing for courses configured with membership options
-            if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP !== $selling_option && 
-                 \TUTOR\Course::SELLING_OPTION_ALL !== $selling_option ) {
-                // For one_time, subscription, or both - return original HTML (shows individual pricing)
-                return $html;
-            }
-        }
-
-        // For membership-only mode OR courses with 'membership' or 'all' selling option,
-        // show PMPro membership plans
+        // For all paid courses with PMPro monetization, show PMPro pricing:
+        // - one_time: Shows PMPro one-time level
+        // - subscription: Shows PMPro subscription plans
+        // - both: Shows PMPro one-time + subscription plans
+        // - membership: Shows full-site membership levels
+        // - all: Shows all PMPro levels (course-specific + full-site membership)
+        //
+        // The pmpro_pricing() method handles filtering which levels to show
+        // based on membership-only mode and selling option.
         return $this->pmpro_pricing( $html, $course_id );
     }
 
