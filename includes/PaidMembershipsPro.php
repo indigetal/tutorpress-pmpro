@@ -214,7 +214,7 @@ class PaidMembershipsPro {
             }
             
             // For all other cases (false, array, etc.), show "View Pricing" button
-            return $this->render_membership_price_button();
+            return $this->render_membership_price_button( $course_id );
         }
 
         // Below this point: Hybrid mode (membership-only is OFF)
@@ -224,6 +224,12 @@ class PaidMembershipsPro {
         }
         if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
             return $html;
+        }
+
+        // Check if this course has "membership" selling option - show "View Pricing" button
+        $selling_option = \TUTOR\Course::get_selling_option( $course_id );
+        if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
+            return $this->render_membership_price_button( $course_id );
         }
 
         // Must have PMPro level associations
@@ -1623,25 +1629,31 @@ class PaidMembershipsPro {
     }
 
     /**
-     * Render the "View Pricing" button for membership-only mode in course loops.
+     * Render the "View Pricing" button for membership-only mode and membership selling option in course loops.
      * 
-     * Displays a button linking to the PMPro levels page.
+     * Displays a button linking to the individual course page where full pricing details are displayed.
      *
      * @since 1.4.0
+     * @param int $course_id Course ID to link to.
      * @return string HTML for the pricing button.
      */
-    public function render_membership_price_button() {
-        $level_page_id = apply_filters( 'TUTORPRESS_PMPRO_level_page_id', pmpro_getOption( 'levels_page_id' ) );
-        $level_page_url = get_permalink( $level_page_id );
+    public function render_membership_price_button( $course_id = 0 ) {
+        // If no course_id provided, try to get from current context
+        if ( ! $course_id ) {
+            $course_id = get_the_ID();
+        }
 
-        if ( ! $level_page_url ) {
-            $level_page_url = home_url( '/membership-levels/' );
+        // Link to the individual course page
+        $course_url = get_permalink( $course_id );
+
+        if ( ! $course_url ) {
+            $course_url = home_url();
         }
 
         ob_start();
         ?>
         <div class="tutor-d-flex tutor-align-center">
-            <a href="<?php echo esc_url( $level_page_url ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block">
+            <a href="<?php echo esc_url( $course_url ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block">
                 <?php esc_html_e( 'View Pricing', 'tutorpress-pmpro' ); ?>
             </a>
         </div>
