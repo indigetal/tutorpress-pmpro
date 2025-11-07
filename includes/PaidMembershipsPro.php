@@ -827,19 +827,32 @@ class PaidMembershipsPro {
                     return $html;
                 }
             } elseif ( \TUTOR\Course::SELLING_OPTION_ALL === $selling_option ) {
-                // For 'all' selling option, we need to handle this differently
-                // For now, show full-site membership levels (individual pricing will be handled by Tutor's native template)
-                $required_levels = self::pmpro_get_active_full_site_levels();
+                // For 'all' selling option, show ALL levels: course-specific (one-time + subscription) + full-site membership
+                
+                // Get ALL course-specific levels
+                global $wpdb;
+                $course_level_ids = array();
+                if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+                    $course_level_ids = $wpdb->get_col( $wpdb->prepare( 
+                        "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", 
+                        $course_id 
+                    ) );
+                }
+                
+                // Get full-site membership levels
+                $full_site_level_ids = self::pmpro_get_active_full_site_levels();
+                
+                // Combine and remove duplicates
+                $all_level_ids = array_unique( array_merge( $course_level_ids, $full_site_level_ids ) );
                 
                 // Get full level objects
-                $level_objects = array();
-                foreach ( $required_levels as $level_id ) {
+                $required_levels = array();
+                foreach ( $all_level_ids as $level_id ) {
                     $level = pmpro_getLevel( $level_id );
                     if ( $level ) {
-                        $level_objects[] = $level;
+                        $required_levels[] = $level;
                     }
                 }
-                $required_levels = $level_objects;
                 
                 if ( empty( $required_levels ) ) {
                     return $html;
