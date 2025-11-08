@@ -1779,6 +1779,111 @@ class PaidMembershipsPro {
             }
         }
     }
+
+    /**
+     * Get the active price for a PMPro level, accounting for sale schedule.
+     *
+     * Reads sale meta and calculates in real-time whether sale is active.
+     * Returns array with active price, regular price, and sale status.
+     *
+     * @since 1.5.0
+     * @param int $level_id PMPro level ID
+     * @return array {
+     *     Active price data
+     *
+     *     @type float      $price         Active price (sale or regular)
+     *     @type float|null $regular_price Regular price (if on sale) or null
+     *     @type bool       $on_sale       Whether sale is currently active
+     * }
+     */
+    public function get_active_price_for_level( $level_id ) {
+        global $wpdb;
+
+        // Get level data
+        $level = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM {$wpdb->pmpro_membership_levels} WHERE id = %d",
+            $level_id
+        ) );
+
+        if ( ! $level ) {
+            return array(
+                'price'         => 0.0,
+                'regular_price' => null,
+                'on_sale'       => false,
+            );
+        }
+
+        // Get sale meta (stored by REST controller and reconciliation logic)
+        $sale_price = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', true );
+        $regular_initial = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment', true );
+        $regular_price_meta = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', true );
+
+        // Determine regular price (priority: regular_initial > regular_price_meta > level.initial_payment)
+        $regular = ! empty( $regular_initial )
+            ? floatval( $regular_initial )
+            : ( ! empty( $regular_price_meta )
+                ? floatval( $regular_price_meta )
+                : floatval( $level->initial_payment )
+            );
+
+        // Check if sale is active (uses helper method below)
+        if ( $this->is_sale_active( $level_id, $sale_price, $regular ) ) {
+            return array(
+                'price'         => floatval( $sale_price ),
+                'regular_price' => $regular,
+                'on_sale'       => true,
+            );
+        }
+
+        // No active sale
+        return array(
+            'price'         => $regular,
+            'regular_price' => null,
+            'on_sale'       => false,
+        );
+    }
+
+    /**
+     * Check if a sale is currently active for a level.
+     *
+     * Validates sale price and checks if current time is within sale schedule.
+     * Uses Tutor LMS DateTimeHelper for timezone consistency.
+     *
+     * @since 1.5.0
+     * @param int   $level_id      PMPro level ID
+     * @param mixed $sale_price    Sale price from meta
+     * @param float $regular_price Regular price for comparison
+     * @return bool True if sale is active, false otherwise
+     */
+    private function is_sale_active( $level_id, $sale_price, $regular_price ) {
+        // Validate sale price exists and is less than regular
+        if ( empty( $sale_price ) || floatval( $sale_price ) <= 0 || floatval( $sale_price ) >= $regular_price ) {
+            return false;
+        }
+
+        // Get sale schedule
+        $sale_from = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from', true );
+        $sale_to = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to', true );
+
+        // If no schedule, sale is always active (open-ended sale)
+        if ( empty( $sale_from ) || empty( $sale_to ) ) {
+            return true;
+        }
+
+        // Check date range using Tutor LMS timezone helper (aligns with TutorPress)
+        if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) ) {
+            $now = \Tutor\Helpers\DateTimeHelper::now()->format( 'U' );
+            $from_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_from )->format( 'U' );
+            $to_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_to )->format( 'U' );
+        } else {
+            // Fallback to WordPress core (GMT/UTC)
+            $now = current_time( 'timestamp', true );
+            $from_timestamp = strtotime( $sale_from );
+            $to_timestamp = strtotime( $sale_to );
+        }
+
+        return ( $now >= $from_timestamp && $now <= $to_timestamp );
+    }
 }
 
 
