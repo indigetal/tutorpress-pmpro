@@ -40,6 +40,8 @@ class TutorPress_PMPro_Mapper {
                 'trial_amount'    => isset( $ui['trial_fee'] ) ? floatval( $ui['trial_fee'] ) : 0.0,
                 'meta'            => array(
                     'sale_price' => isset( $ui['sale_price'] ) ? $ui['sale_price'] : null,
+                    'sale_price_from' => isset( $ui['sale_price_from'] ) ? $ui['sale_price_from'] : null,
+                    'sale_price_to' => isset( $ui['sale_price_to'] ) ? $ui['sale_price_to'] : null,
                     'provide_certificate' => isset( $ui['provide_certificate'] ) ? (bool) $ui['provide_certificate'] : null,
                     'is_featured' => isset( $ui['is_featured'] ) ? (bool) $ui['is_featured'] : null,
                 ),
@@ -61,6 +63,8 @@ class TutorPress_PMPro_Mapper {
             'trial_amount'    => isset( $ui['trial_fee'] ) ? floatval( $ui['trial_fee'] ) : 0.0,
             'meta'            => array(
                 'sale_price' => isset( $ui['sale_price'] ) ? $ui['sale_price'] : null,
+                'sale_price_from' => isset( $ui['sale_price_from'] ) ? $ui['sale_price_from'] : null,
+                'sale_price_to' => isset( $ui['sale_price_to'] ) ? $ui['sale_price_to'] : null,
                 'provide_certificate' => isset( $ui['provide_certificate'] ) ? (bool) $ui['provide_certificate'] : null,
                 'is_featured' => isset( $ui['is_featured'] ) ? (bool) $ui['is_featured'] : null,
             ),
@@ -81,6 +85,8 @@ class TutorPress_PMPro_Mapper {
         $meta_is_featured = null;
         $meta_regular_initial_payment = null;
         $meta_regular_price = null;
+        $meta_sale_from = null;
+        $meta_sale_to = null;
         
         if ( function_exists( 'get_pmpro_membership_level_meta' ) ) {
             $meta_sale = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'sale_price', true );
@@ -90,6 +96,10 @@ class TutorPress_PMPro_Mapper {
             // Check for stored regular prices (used when sale is active)
             $meta_regular_initial_payment = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_regular_initial_payment', true );
             $meta_regular_price = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_regular_price', true );
+            
+            // Check for sale schedule dates (Step 3.3)
+            $meta_sale_from = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_sale_price_from', true );
+            $meta_sale_to = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_sale_price_to', true );
         }
 
         // Derive payment_type from PMPro level data
@@ -125,6 +135,8 @@ class TutorPress_PMPro_Mapper {
             'trial_value'       => isset( $l['trial_limit'] ) ? intval( $l['trial_limit'] ) : 0,
             'trial_fee'         => isset( $l['trial_amount'] ) ? floatval( $l['trial_amount'] ) : 0.0,
             'sale_price'        => $meta_sale ?? null,
+            'sale_price_from'   => $meta_sale_from ?? null,
+            'sale_price_to'     => $meta_sale_to ?? null,
             'provide_certificate'=> is_null( $meta_provide_certificate ) ? null : (bool) $meta_provide_certificate,
             'is_featured'       => is_null( $meta_is_featured ) ? null : (bool) $meta_is_featured,
             'status'            => 'active',

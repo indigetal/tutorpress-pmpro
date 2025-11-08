@@ -1170,8 +1170,55 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$sale_price = floatval( $sale_price_meta );
 		}
 
-		// Validate sale price
-		$is_valid_sale = ( $sale_price > 0 && $sale_price < $regular_initial_payment );
+		// Check if we're within the sale date range (Step 3.2)
+		// Use GMT/UTC to match TutorPress date storage (dates stored via convertToGMT())
+		// Leverage Tutor LMS DateTimeHelper if available, otherwise use WordPress core functions
+		if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) ) {
+			// Use Tutor's DateTimeHelper for consistency with Tutor LMS/TutorPress
+			$now = \Tutor\Helpers\DateTimeHelper::now()->format( 'U' ); // Unix timestamp in GMT
+		} else {
+			// Fallback to WordPress core
+			$now = current_time( 'timestamp', true ); // true = GMT/UTC
+		}
+		
+		$sale_from = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from', true );
+		$sale_to = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to', true );
+
+		// Default to active if no dates set (open-ended sale)
+		$is_within_date_range = true;
+
+		if ( ! empty( $sale_from ) && ! empty( $sale_to ) ) {
+			// Convert stored dates to timestamps (dates stored in GMT by TutorPress convertToGMT())
+			if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) ) {
+				// Use Tutor's DateTimeHelper for date parsing
+				$from_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_from )->format( 'U' );
+				$to_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_to )->format( 'U' );
+			} else {
+				// Fallback to PHP's strtotime
+				$from_timestamp = strtotime( $sale_from );
+				$to_timestamp = strtotime( $sale_to );
+			}
+			$is_within_date_range = ( $now >= $from_timestamp && $now <= $to_timestamp );
+			
+			// Debug logging
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				error_log( sprintf(
+					'[TP-PMPRO] sale_date_check level_id=%d now=%s (%d) from=%s (%d) to=%s (%d) within_range=%s',
+					$level_id,
+					date( 'Y-m-d H:i:s', $now ),
+					$now,
+					date( 'Y-m-d H:i:s', $from_timestamp ),
+					$from_timestamp,
+					date( 'Y-m-d H:i:s', $to_timestamp ),
+					$to_timestamp,
+					$is_within_date_range ? 'yes' : 'no'
+				) );
+			}
+		}
+
+		// Validate sale price AND date range
+		// NOTE: We validate price exists, but keep it stored even if outside date range
+		$is_valid_sale = ( $sale_price > 0 && $sale_price < $regular_initial_payment && $is_within_date_range );
 
 		if ( $is_valid_sale ) {
 			// Update level's initial_payment to sale price (enrollment window discount)
@@ -1193,7 +1240,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 				error_log( '[TP-PMPRO] applied_sale_price_subscription level_id=' . $level_id . ' sale_price=' . $sale_price . ' regular_initial_payment=' . $regular_initial_payment . ' initial_payment_updated=1' );
 			}
 		} else {
-			// No valid sale price: restore regular initial payment
+			// Sale not active (either invalid price, outside date range, or no sale set)
+			// Restore regular initial payment
 			$wpdb->update(
 				$wpdb->pmpro_membership_levels,
 				array( 'initial_payment' => $regular_initial_payment ),
@@ -1202,19 +1250,33 @@ if ( ! defined( 'ABSPATH' ) ) {
 				array( '%d' )
 			);
 
-			// Clean up ALL sale price meta (including the sale_price itself)
-			delete_pmpro_membership_level_meta( $level_id, 'sale_price' );
-			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price' );
-			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment' );
-			
-			if ( $sale_price > 0 ) {
-				// Log validation failure for debugging
-				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-					error_log( '[TP-PMPRO] invalid_sale_price_subscription level_id=' . $level_id . ' sale_price=' . $sale_price . ' regular_initial_payment=' . $regular_initial_payment . ' reason=sale_must_be_less_than_regular initial_payment_restored=1' );
-				}
-			} else {
+			// Only delete sale meta if sale price was explicitly removed (0 or null)
+			// Do NOT delete if it's just outside the date range (scheduled sale)
+			if ( $sale_price <= 0 ) {
+				// User removed sale price - clean up ALL sale meta
+				delete_pmpro_membership_level_meta( $level_id, 'sale_price' );
+				delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price' );
+				delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment' );
+				delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from' );
+				delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to' );
+				
 				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 					error_log( '[TP-PMPRO] cleared_sale_price_subscription level_id=' . $level_id . ' initial_payment_restored=' . $regular_initial_payment );
+				}
+			} else {
+				// Sale price exists but not currently active (future/expired or invalid)
+				// Keep sale meta, just restore regular price
+				delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment' );
+				
+				$reason = '';
+				if ( $sale_price >= $regular_initial_payment ) {
+					$reason = 'sale_must_be_less_than_regular';
+				} elseif ( ! $is_within_date_range ) {
+					$reason = 'outside_date_range';
+				}
+				
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					error_log( '[TP-PMPRO] sale_not_active_subscription level_id=' . $level_id . ' sale_price=' . $sale_price . ' regular_initial_payment=' . $regular_initial_payment . ' reason=' . $reason . ' initial_payment_restored=1 sale_meta_kept=1' );
 				}
 			}
 		}

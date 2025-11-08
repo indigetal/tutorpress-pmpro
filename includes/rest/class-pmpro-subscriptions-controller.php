@@ -540,6 +540,18 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				}
 			}
 
+			// Store sale schedule dates with tutorpress prefix (Step 3.1)
+			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+				// Store sale_price_from if provided
+				if ( isset( $level_data['meta']['sale_price_from'] ) && ! empty( $level_data['meta']['sale_price_from'] ) ) {
+					update_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from', $level_data['meta']['sale_price_from'] );
+				}
+				// Store sale_price_to if provided
+				if ( isset( $level_data['meta']['sale_price_to'] ) && ! empty( $level_data['meta']['sale_price_to'] ) ) {
+					update_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to', $level_data['meta']['sale_price_to'] );
+				}
+			}
+
 			// Handle sale price for recurring subscriptions (Step 2)
 			// Only process sale price for recurring plans (not one-time)
 			// Sale price applies to initial_payment (enrollment window discount)
@@ -690,6 +702,18 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
                 }
             }
         }
+
+	// Store sale schedule dates with tutorpress prefix (Step 3.1)
+	if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+		// Store sale_price_from if provided
+		if ( isset( $incoming_meta['meta']['sale_price_from'] ) && ! empty( $incoming_meta['meta']['sale_price_from'] ) ) {
+			update_pmpro_membership_level_meta( $plan_id, 'tutorpress_sale_price_from', $incoming_meta['meta']['sale_price_from'] );
+		}
+		// Store sale_price_to if provided
+		if ( isset( $incoming_meta['meta']['sale_price_to'] ) && ! empty( $incoming_meta['meta']['sale_price_to'] ) ) {
+			update_pmpro_membership_level_meta( $plan_id, 'tutorpress_sale_price_to', $incoming_meta['meta']['sale_price_to'] );
+		}
+	}
 
 	// Handle sale price for recurring subscriptions (Step 2)
 	// Only process sale price for recurring plans (not one-time)
