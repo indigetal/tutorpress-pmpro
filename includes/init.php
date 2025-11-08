@@ -1138,6 +1138,89 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * Handle sale price storage for recurring subscription levels.
+	 * 
+	 * Implements PMPro sale price pattern for subscriptions (enrollment window model):
+	 * 1. When sale active: level.initial_payment = sale_price, store regular_initial_payment in meta
+	 * 2. When no sale: level.initial_payment = regular_initial_payment, clear sale meta
+	 * 
+	 * This creates an enrollment window where new subscribers get a discounted first payment,
+	 * but renewal billing (billing_amount) remains at the regular recurring price.
+	 * 
+	 * Sale dates represent the enrollment window (when students can sign up at the discount).
+	 *
+	 * @since 1.5.0
+	 * @param int   $level_id                PMPro level ID
+	 * @param float $regular_initial_payment Regular first payment amount
+	 * @return void
+	 */
+	public static function handle_sale_price_for_subscription( $level_id, $regular_initial_payment ) {
+		if ( ! function_exists( 'get_pmpro_membership_level_meta' ) || ! function_exists( 'update_pmpro_membership_level_meta' ) || ! function_exists( 'delete_pmpro_membership_level_meta' ) ) {
+			return;
+		}
+
+		global $wpdb;
+
+		// Read sale price from level meta (subscription sale prices are stored per-plan, not per-course)
+		$sale_price_meta = get_pmpro_membership_level_meta( $level_id, 'sale_price', true );
+		
+		// Handle null, empty string, or 0 as no sale price
+		$sale_price = 0.0;
+		if ( ! empty( $sale_price_meta ) && is_numeric( $sale_price_meta ) ) {
+			$sale_price = floatval( $sale_price_meta );
+		}
+
+		// Validate sale price
+		$is_valid_sale = ( $sale_price > 0 && $sale_price < $regular_initial_payment );
+
+		if ( $is_valid_sale ) {
+			// Update level's initial_payment to sale price (enrollment window discount)
+			$wpdb->update(
+				$wpdb->pmpro_membership_levels,
+				array( 'initial_payment' => $sale_price ),
+				array( 'id' => $level_id ),
+				array( '%f' ),
+				array( '%d' )
+			);
+
+			// Store regular initial payment in meta (for display with strikethrough)
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment', $regular_initial_payment );
+			
+			// Store sale price in prefixed meta key (for internal tracking)
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', $sale_price );
+			
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				error_log( '[TP-PMPRO] applied_sale_price_subscription level_id=' . $level_id . ' sale_price=' . $sale_price . ' regular_initial_payment=' . $regular_initial_payment . ' initial_payment_updated=1' );
+			}
+		} else {
+			// No valid sale price: restore regular initial payment
+			$wpdb->update(
+				$wpdb->pmpro_membership_levels,
+				array( 'initial_payment' => $regular_initial_payment ),
+				array( 'id' => $level_id ),
+				array( '%f' ),
+				array( '%d' )
+			);
+
+			// Clean up ALL sale price meta (including the sale_price itself)
+			delete_pmpro_membership_level_meta( $level_id, 'sale_price' );
+			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price' );
+			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment' );
+			
+			if ( $sale_price > 0 ) {
+				// Log validation failure for debugging
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					error_log( '[TP-PMPRO] invalid_sale_price_subscription level_id=' . $level_id . ' sale_price=' . $sale_price . ' regular_initial_payment=' . $regular_initial_payment . ' reason=sale_must_be_less_than_regular initial_payment_restored=1' );
+				}
+			} else {
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					error_log( '[TP-PMPRO] cleared_sale_price_subscription level_id=' . $level_id . ' initial_payment_restored=' . $regular_initial_payment );
+				}
+			}
+		}
+	}
+
+	/**
 	 * Handle Membership-only branch: delete all course-specific PMPro levels.
 	 * This is used when selling_option is set to 'membership' (full-site membership only).
 	 * 

@@ -539,6 +539,17 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 					}
 				}
 			}
+
+			// Handle sale price for recurring subscriptions (Step 2)
+			// Only process sale price for recurring plans (not one-time)
+			// Sale price applies to initial_payment (enrollment window discount)
+			if ( $payment_type !== 'one_time' && isset( $db_level_data['initial_payment'] ) ) {
+				$regular_initial_payment = floatval( $db_level_data['initial_payment'] );
+				if ( $regular_initial_payment > 0 ) {
+					// Call static method to handle sale price logic
+					\TUTORPRESS_PMPRO\Init::handle_sale_price_for_subscription( $level_id, $regular_initial_payment );
+				}
+			}
 		}
 
 		// Map created level back into TutorPress UI shape for response
@@ -664,8 +675,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
             }
 		}
 
-		// Persist UI-only meta if provided
-		$incoming_meta = $mapper->map_ui_to_pmpro( $request->get_params() );
+	// Persist UI-only meta if provided
+	$incoming_meta = $mapper->map_ui_to_pmpro( $request->get_params() );
         if ( isset( $incoming_meta['meta'] ) && is_array( $incoming_meta['meta'] ) ) {
             foreach ( $incoming_meta['meta'] as $meta_key => $meta_val ) {
                 if ( is_bool( $meta_val ) ) {
@@ -680,11 +691,22 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
             }
         }
 
-		// Return the updated level using mapper
-		$level = pmpro_getLevel( $plan_id );
-		$payload = $mapper->map_pmpro_to_ui( $level );
+	// Handle sale price for recurring subscriptions (Step 2)
+	// Only process sale price for recurring plans (not one-time)
+	// Sale price applies to initial_payment (enrollment window discount)
+	if ( $payment_type !== 'one_time' && isset( $update_data['initial_payment'] ) ) {
+		$regular_initial_payment = floatval( $update_data['initial_payment'] );
+		if ( $regular_initial_payment > 0 ) {
+			// Call static method to handle sale price logic
+			\TUTORPRESS_PMPRO\Init::handle_sale_price_for_subscription( $plan_id, $regular_initial_payment );
+		}
+	}
 
-		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'PMPro membership level updated.', 'tutorpress-pmpro' ) ) );
+	// Return the updated level using mapper
+	$level = pmpro_getLevel( $plan_id );
+	$payload = $mapper->map_pmpro_to_ui( $level );
+
+	return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'PMPro membership level updated.', 'tutorpress-pmpro' ) ) );
 	}
 
 	/**

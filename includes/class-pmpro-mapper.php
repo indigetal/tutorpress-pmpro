@@ -79,11 +79,17 @@ class TutorPress_PMPro_Mapper {
         $meta_sale = null;
         $meta_provide_certificate = null;
         $meta_is_featured = null;
+        $meta_regular_initial_payment = null;
+        $meta_regular_price = null;
+        
         if ( function_exists( 'get_pmpro_membership_level_meta' ) ) {
             $meta_sale = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'sale_price', true );
             $meta_provide_certificate = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'provide_certificate', true );
             $meta_is_featured = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'is_featured', true );
             
+            // Check for stored regular prices (used when sale is active)
+            $meta_regular_initial_payment = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_regular_initial_payment', true );
+            $meta_regular_price = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_regular_price', true );
         }
 
         // Derive payment_type from PMPro level data
@@ -92,14 +98,25 @@ class TutorPress_PMPro_Mapper {
         $cycle_number = isset( $l['cycle_number'] ) ? intval( $l['cycle_number'] ) : 0;
         $payment_type = ( $billing_amount <= 0 && $cycle_number === 0 ) ? 'one_time' : 'recurring';
 
+        // Determine enrollment_fee: if sale is active, use regular from meta; otherwise use current initial_payment
+        $enrollment_fee = isset( $l['initial_payment'] ) ? floatval( $l['initial_payment'] ) : 0.0;
+        
+        if ( $payment_type === 'recurring' && ! empty( $meta_regular_initial_payment ) ) {
+            // Subscription with active sale: use regular initial payment from meta
+            $enrollment_fee = floatval( $meta_regular_initial_payment );
+        } elseif ( $payment_type === 'one_time' && ! empty( $meta_regular_price ) ) {
+            // One-time purchase with active sale: use regular price from meta
+            $enrollment_fee = floatval( $meta_regular_price );
+        }
+
         return array(
             'id'                => (int) ( $l['id'] ?? 0 ),
             'plan_name'         => $l['name'] ?? '',
             'description'       => $l['description'] ?? '',
             // regular_price here represents the recurring/renewal price (billing_amount)
             'regular_price'     => $billing_amount,
-            // enrollment_fee is the initial payment
-            'enrollment_fee'    => isset( $l['initial_payment'] ) ? floatval( $l['initial_payment'] ) : 0.0,
+            // enrollment_fee is the initial payment (regular, not sale price)
+            'enrollment_fee'    => $enrollment_fee,
             'payment_type'      => $payment_type,
             'recurring_value'   => $cycle_number,
             // Normalize interval to lowercase token expected by the UI (e.g. 'month', 'week')
