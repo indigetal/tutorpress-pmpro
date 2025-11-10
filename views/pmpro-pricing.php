@@ -47,16 +47,93 @@
 
 				<div class="tutor-fs-4">
 					<?php
+						// Step 3.4b: Dynamic pricing display with sale support
+						// PMPro Model: initial_payment (first payment) + billing_amount (recurring)
+						// Sale applies to initial_payment only (enrollment window discount)
 						$billing_amount  = round( $level->billing_amount );
-						$initial_payment = round( $level->initial_payment );
+						
+						// Use active_price if available (calculated in pmpro_pricing method)
+						// Otherwise fall back to initial_payment for backward compatibility
+						$display_initial = isset( $level->active_price ) ? round( $level->active_price ) : round( $level->initial_payment );
+						
+						// Check if sale is active
+						$is_on_sale = ! empty( $level->is_on_sale );
+						$regular_initial = ! empty( $level->regular_price_display ) ? round( $level->regular_price_display ) : $display_initial;
 
-						$billing_text                                       = '<span class="tutor-fw-bold">';
-							'left' === $currency_position ? $billing_text  .= $currency_symbol : 0;
-								$billing_text                              .= ( $level->cycle_period ? $billing_amount : $initial_payment );
-							'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
-						$billing_text                                      .= '</span>';
-
-						$billing_text .= ( $level->cycle_period ? '<span class="tutor-fs-7 tutor-color-muted">/' . substr( $level->cycle_period, 0, 2 ) . '</span>' : '' );
+						// Build price display HTML
+						$billing_text = '';
+						
+						if ( $level->cycle_period ) {
+							// RECURRING SUBSCRIPTION
+							// PMPro always has initial_payment (first payment) + billing_amount (recurring)
+							// Sale applies to initial payment (enrollment window discount)
+							
+							if ( $is_on_sale && $regular_initial > $display_initial ) {
+								// WITH SALE: Show "~~$100~~ $75 (then $50/Mo)"
+								// Show regular initial payment with strikethrough
+								$billing_text .= '<span class="tutor-fw-normal" style="text-decoration: line-through; opacity: 0.6; margin-right: 8px;">';
+									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+										$billing_text .= $regular_initial;
+									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+								$billing_text .= '</span>';
+								
+								// Show discounted initial payment
+								$billing_text .= '<span class="tutor-fw-bold">';
+									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+										$billing_text .= $display_initial;
+									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+								$billing_text .= '</span>';
+							} else {
+								// NO SALE: Show initial payment if different from recurring
+								// If initial = recurring, just show recurring. Otherwise show "initial (then recurring)"
+								if ( $display_initial != $billing_amount ) {
+									// Show "$100 (then $50/Mo)"
+									$billing_text .= '<span class="tutor-fw-bold">';
+										'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+											$billing_text .= $display_initial;
+										'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+									$billing_text .= '</span>';
+								} else {
+									// Initial = recurring, just show recurring like "$50/Mo"
+									$billing_text .= '<span class="tutor-fw-bold">';
+										'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+											$billing_text .= $billing_amount;
+										'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+									$billing_text .= '</span>';
+									$billing_text .= '<span class="tutor-fs-7 tutor-color-muted">/' . substr( $level->cycle_period, 0, 2 ) . '</span>';
+								}
+							}
+							
+							// Always show recurring amount in parentheses if initial != recurring
+							if ( $display_initial != $billing_amount ) {
+								$billing_text .= ' <span class="tutor-fs-6 tutor-color-muted">(';
+								$billing_text .= esc_html__( 'then', 'tutorpress-pmpro' ) . ' ';
+								$billing_text .= '<span class="tutor-fw-medium">';
+									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+										$billing_text .= $billing_amount;
+									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+								$billing_text .= '/' . substr( $level->cycle_period, 0, 2 );
+								$billing_text .= '</span>';
+								$billing_text .= ')</span>';
+							}
+						} else {
+							// ONE-TIME PURCHASE
+							// Show sale price with strikethrough regular price
+							if ( $is_on_sale && $regular_initial > $display_initial ) {
+								$billing_text .= '<span class="tutor-fw-normal" style="text-decoration: line-through; opacity: 0.6; margin-right: 8px;">';
+									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+										$billing_text .= $regular_initial;
+									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+								$billing_text .= '</span>';
+							}
+							
+							// Show active price
+							$billing_text .= '<span class="tutor-fw-bold">';
+								'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+									$billing_text .= $display_initial;
+								'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+							$billing_text .= '</span>';
+						}
 
 						echo $billing_text;//phpcs:ignore
 					?>

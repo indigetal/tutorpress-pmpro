@@ -276,16 +276,66 @@ class PaidMembershipsPro {
                 foreach ( $level_ids as $lid ) {
                     $level = function_exists( 'pmpro_getLevel' ) ? pmpro_getLevel( (int) $lid ) : null;
                     if ( ! $level ) continue;
-                    $init  = isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0;
+                    
+                    // Step 3.4b: Use dynamic pricing for archive display with sale support
+                    $active_price_data = $this->get_active_price_for_level( (int) $lid );
+                    $init  = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : ( isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0 );
+                    $is_on_sale = ! empty( $active_price_data['on_sale'] );
+                    $regular_price = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $init;
+                    
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[TP-PMPRO] Level ID=' . $lid . ' init=' . $init . ' is_on_sale=' . ( $is_on_sale ? 'yes' : 'no' ) . ' regular=' . $regular_price );
+                    }
+                    
                     $bill  = isset( $level->billing_amount ) ? (float) $level->billing_amount : 0.0;
                     $cycle = isset( $level->cycle_number ) ? (int) $level->cycle_number : 0;
                     $per   = isset( $level->cycle_period ) ? strtolower( (string) $level->cycle_period ) : '';
 
                     if ( $bill > 0 && $cycle > 0 && $per ) {
-                        $amount_strings[] = sprintf( '%s %s/%s', $fmt( $bill ), __( 'per', 'tutorpress-pmpro' ), $per_label( $per ) );
-                        $numeric_amounts[] = $bill;
+                        // RECURRING SUBSCRIPTION
+                        // Show initial payment with sale indication, plus recurring in parentheses
+                        $price_str = '';
+                        
+                        if ( $is_on_sale && $regular_price > $init ) {
+                            // With sale: "~~$100~~ $75 (then $50/Mo)"
+                            $price_str = sprintf(
+                                '<del style="opacity: 0.6;">%s</del> %s <span style="opacity: 0.7;">(%s %s/%s)</span>',
+                                $fmt( $regular_price ),
+                                $fmt( $init ),
+                                __( 'then', 'tutorpress-pmpro' ),
+                                $fmt( $bill ),
+                                $per_label( $per )
+                            );
+                        } elseif ( $init != $bill ) {
+                            // No sale, but initial differs from recurring: "$100 (then $50/Mo)"
+                            $price_str = sprintf(
+                                '%s <span style="opacity: 0.7;">(%s %s/%s)</span>',
+                                $fmt( $init ),
+                                __( 'then', 'tutorpress-pmpro' ),
+                                $fmt( $bill ),
+                                $per_label( $per )
+                            );
+                        } else {
+                            // Initial = recurring: Just "$50/Mo"
+                            $price_str = sprintf( '%s %s/%s', $fmt( $bill ), __( 'per', 'tutorpress-pmpro' ), $per_label( $per ) );
+                        }
+                        
+                        $amount_strings[] = $price_str;
+                        $numeric_amounts[] = $init; // Use initial for price comparison
                     } elseif ( $init > 0 ) {
-                        $amount_strings[] = sprintf( '%s %s', $fmt( $init ), __( 'one-time', 'tutorpress-pmpro' ) );
+                        // ONE-TIME PURCHASE
+                        if ( $is_on_sale && $regular_price > $init ) {
+                            // With sale: "~~$100~~ $75 one-time"
+                            $amount_strings[] = sprintf(
+                                '<del style="opacity: 0.6;">%s</del> %s %s',
+                                $fmt( $regular_price ),
+                                $fmt( $init ),
+                                __( 'one-time', 'tutorpress-pmpro' )
+                            );
+                        } else {
+                            // No sale: "$100 one-time"
+                            $amount_strings[] = sprintf( '%s %s', $fmt( $init ), __( 'one-time', 'tutorpress-pmpro' ) );
+                        }
                         $numeric_amounts[] = $init;
                     }
                 }
@@ -294,8 +344,20 @@ class PaidMembershipsPro {
                 if ( count( $amount_strings ) === 1 ) {
                     $price = $amount_strings[0];
                 } else {
+                    // Multiple pricing options - find the minimum and show it with "Starting at"
                     $min = min( $numeric_amounts );
-                    $price = sprintf( '%s %s', __( 'Starts from', 'tutorpress-pmpro' ), $fmt( $min ) );
+                    $min_index = array_search( $min, $numeric_amounts );
+                    
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[TP-PMPRO] Multiple plans - course_id=' . $course_id );
+                        error_log( '[TP-PMPRO] numeric_amounts: ' . print_r( $numeric_amounts, true ) );
+                        error_log( '[TP-PMPRO] amount_strings: ' . print_r( $amount_strings, true ) );
+                        error_log( '[TP-PMPRO] min=' . $min . ', min_index=' . $min_index );
+                    }
+                    
+                    // Use the full price string (with sale if applicable) for the minimum price
+                    $min_price_display = isset( $amount_strings[ $min_index ] ) ? $amount_strings[ $min_index ] : $fmt( $min );
+                    $price = sprintf( '%s %s', __( 'Starting at', 'tutorpress-pmpro' ), $min_price_display );
                 }
             }
         }
@@ -308,7 +370,7 @@ class PaidMembershipsPro {
         ?>
         <div class="tutor-d-flex tutor-align-center tutor-justify-between">
             <div class="list-item-price tutor-d-flex tutor-align-center">
-                <span class="price tutor-fs-6 tutor-fw-bold tutor-color-black"><?php echo esc_html( $price ); ?></span>
+                <span class="price tutor-fs-6 tutor-fw-bold tutor-color-black"><?php echo wp_kses_post( $price ); ?></span>
             </div>
             <div class="list-item-button">
                 <a href="<?php echo esc_url( get_the_permalink( $course_id ) ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block"><?php esc_html_e( 'View Details', 'tutorpress-pmpro' ); ?></a>
@@ -918,6 +980,19 @@ class PaidMembershipsPro {
                 $required_levels = $course_specific_levels;
             }
         }
+        
+        // Calculate active prices for all levels (Step 3.4b: Dynamic Pricing)
+        // This ensures frontend displays reflect real-time sale status with zero delay
+        foreach ( $required_levels as &$level ) {
+            // Get active price (accounts for sale schedule)
+            $active_price = $this->get_active_price_for_level( $level->id );
+            
+            // Attach active price data to level object for template use
+            $level->active_price = $active_price['price'];
+            $level->regular_price_display = $active_price['regular_price'];
+            $level->is_on_sale = $active_price['on_sale'];
+        }
+        unset( $level ); // Break reference
         
         // Render membership pricing template with the appropriate levels
         $level_page_id  = apply_filters( 'TUTORPRESS_PMPRO_level_page_id', pmpro_getOption( 'levels_page_id' ) );

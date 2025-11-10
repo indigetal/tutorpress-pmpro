@@ -1093,6 +1093,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Read sale price from course meta
 		$sale_price = get_post_meta( $course_id, 'tutor_course_sale_price', true );
 		$sale_price = ! empty( $sale_price ) ? floatval( $sale_price ) : 0.0;
+		
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			error_log( '[TP-PMPRO] handle_sale_price_for_one_time called: course_id=' . $course_id . ' level_id=' . $level_id . ' regular_price=' . $regular_price . ' sale_price_from_meta=' . $sale_price );
+		}
 
 		// Validate sale price
 		$is_valid_sale = ( $sale_price > 0 && $sale_price < $regular_price );
@@ -1289,6 +1293,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 					}
 					\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 					
+					// Handle sale price for the newly created one-time level
+					$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
+					
 					$one_time[] = $level_id;
 					$this->log( '[TP-PMPRO] handle_both_and_all_branch created_one_time_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
 				}
@@ -1296,7 +1303,30 @@ if ( ! defined( 'ABSPATH' ) ) {
 				$this->log( '[TP-PMPRO] handle_both_and_all_branch skipped_one_time_creation (no price set); course=' . $course_id );
 			}
 		} else {
-			$this->log( '[TP-PMPRO] handle_both_and_all_branch one_time_level_exists; course=' . $course_id . ' level_id=' . $one_time[0] );
+			// One-time level already exists - update it with current price and sale
+			$existing_level_id = (int) $one_time[0];
+			$regular_price = get_post_meta( $course_id, 'tutor_course_price', true );
+			$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
+			
+			if ( $regular_price > 0 ) {
+				// Update the level's title and description
+				global $wpdb;
+				$wpdb->update(
+					$wpdb->pmpro_membership_levels,
+					array(
+						'name'        => get_the_title( $course_id ) . ' (One-time)',
+						'description' => get_post_field( 'post_excerpt', $course_id ) ?: '',
+					),
+					array( 'id' => $existing_level_id ),
+					array( '%s', '%s' ),
+					array( '%d' )
+				);
+				
+				// Handle sale price (which will also update initial_payment)
+				$this->handle_sale_price_for_one_time( $course_id, $existing_level_id, $regular_price );
+			}
+			
+			$this->log( '[TP-PMPRO] handle_both_and_all_branch one_time_level_exists; course=' . $course_id . ' level_id=' . $existing_level_id );
 		}
 		
 		// Update meta with all valid IDs (one-time + recurring)
