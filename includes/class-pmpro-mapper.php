@@ -93,8 +93,7 @@ class TutorPress_PMPro_Mapper {
             $meta_provide_certificate = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'provide_certificate', true );
             $meta_is_featured = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'is_featured', true );
             
-            // Check for stored regular prices (used when sale is active)
-            $meta_regular_initial_payment = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_regular_initial_payment', true );
+            // Check for stored regular price (used when sale is active)
             $meta_regular_price = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_regular_price', true );
             
             // Check for sale schedule dates (Step 3.3)
@@ -111,11 +110,8 @@ class TutorPress_PMPro_Mapper {
         // Determine enrollment_fee: if sale is active, use regular from meta; otherwise use current initial_payment
         $enrollment_fee = isset( $l['initial_payment'] ) ? floatval( $l['initial_payment'] ) : 0.0;
         
-        if ( $payment_type === 'recurring' && ! empty( $meta_regular_initial_payment ) ) {
-            // Subscription with active sale: use regular initial payment from meta
-            $enrollment_fee = floatval( $meta_regular_initial_payment );
-        } elseif ( $payment_type === 'one_time' && ! empty( $meta_regular_price ) ) {
-            // One-time purchase with active sale: use regular price from meta
+        // If regular price meta exists (sale is active), use it for the UI's enrollment_fee field
+        if ( ! empty( $meta_regular_price ) ) {
             $enrollment_fee = floatval( $meta_regular_price );
         }
 

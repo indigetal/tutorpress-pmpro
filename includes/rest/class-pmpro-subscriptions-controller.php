@@ -541,6 +541,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 
 			// Store sale schedule dates with tutorpress prefix (Step 3.1)
+			// TutorPress already handles GMT conversion, so store as-is
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 				// Store sale_price_from if provided
 				if ( isset( $level_data['meta']['sale_price_from'] ) && ! empty( $level_data['meta']['sale_price_from'] ) ) {
@@ -704,6 +705,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
         }
 
 	// Store sale schedule dates with tutorpress prefix (Step 3.1)
+	// TutorPress already handles GMT conversion, so store as-is
 	if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 		// Store sale_price_from if provided
 		if ( isset( $incoming_meta['meta']['sale_price_from'] ) && ! empty( $incoming_meta['meta']['sale_price_from'] ) ) {

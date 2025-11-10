@@ -1090,55 +1090,48 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		global $wpdb;
 
+		// Step 3.4a: Always store regular price in initial_payment (zero-delay architecture)
+		// Dynamic filters will calculate active price at checkout/display time
+		$wpdb->update(
+			$wpdb->pmpro_membership_levels,
+			array( 'initial_payment' => $regular_price ),
+			array( 'id' => $level_id ),
+			array( '%f' ),
+			array( '%d' )
+		);
+
+		// Store regular price in meta (for display and runtime filters to reference)
+		update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', $regular_price );
+
 		// Read sale price from course meta
 		$sale_price = get_post_meta( $course_id, 'tutor_course_sale_price', true );
 		$sale_price = ! empty( $sale_price ) ? floatval( $sale_price ) : 0.0;
-		
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[TP-PMPRO] handle_sale_price_for_one_time called: course_id=' . $course_id . ' level_id=' . $level_id . ' regular_price=' . $regular_price . ' sale_price_from_meta=' . $sale_price );
-		}
 
 		// Validate sale price
 		$is_valid_sale = ( $sale_price > 0 && $sale_price < $regular_price );
 
 		if ( $is_valid_sale ) {
-			// Update level's initial_payment to sale price (so PMPro charges the sale price)
-			$wpdb->update(
-				$wpdb->pmpro_membership_levels,
-				array( 'initial_payment' => $sale_price ),
-				array( 'id' => $level_id ),
-				array( '%f' ),
-				array( '%d' )
-			);
-
-			// Store regular price in meta (for display with strikethrough)
-			update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', $regular_price );
-			
-			// Store sale price in meta (for Gutenberg editing)
+			// Store sale price in meta (for runtime filters to use)
 			update_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', $sale_price );
 			
-			$this->log( '[TP-PMPRO] applied_sale_price level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price . ' initial_payment_updated=1' );
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				error_log( '[TP-PMPRO] stored_sale_price_one_time level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price );
+			}
 		} else {
-			// No valid sale price: restore regular price to initial_payment
-			$wpdb->update(
-				$wpdb->pmpro_membership_levels,
-				array( 'initial_payment' => $regular_price ),
-				array( 'id' => $level_id ),
-				array( '%f' ),
-				array( '%d' )
-			);
-
-			// Clean up sale price meta
+			// Sale price removed or invalid - clean up sale meta
 			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price' );
-			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price' );
 			
 			if ( $sale_price > 0 ) {
 				// Log validation failure for debugging
-				$this->log( '[TP-PMPRO] invalid_sale_price level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price . ' reason=sale_must_be_less_than_regular initial_payment_restored=1' );
+				$this->log( '[TP-PMPRO] invalid_sale_price level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price . ' reason=sale_must_be_less_than_regular' );
 			} else {
-				$this->log( '[TP-PMPRO] cleared_sale_price level_id=' . $level_id . ' course=' . $course_id . ' initial_payment_restored=' . $regular_price );
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					error_log( '[TP-PMPRO] cleared_sale_price_one_time level_id=' . $level_id . ' course=' . $course_id );
+				}
 			}
 		}
+		
+		// Note: Runtime calculation happens in PaidMembershipsPro::get_active_price_for_level() and filter hooks (Step 3.4c)
 	}
 
 	/**
@@ -1176,7 +1169,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		);
 
 		// Store regular price in meta (for display and runtime filters to reference)
-		update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment', $regular_initial_payment );
+		update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', $regular_initial_payment );
 
 		// Check if sale price was explicitly removed (0, null, or empty)
 		$sale_price_meta = get_pmpro_membership_level_meta( $level_id, 'sale_price', true );
@@ -1184,7 +1177,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			// User removed sale price - clean up ALL sale meta
 			delete_pmpro_membership_level_meta( $level_id, 'sale_price' );
 			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price' );
-			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment' );
+			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price' );
 			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from' );
 			delete_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to' );
 			

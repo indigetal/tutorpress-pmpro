@@ -82,6 +82,16 @@ class PaidMembershipsPro {
 			// Frontend behavior overrides
 			add_filter( 'tutor_allow_guest_attempt_enrollment', array( $this, 'filter_allow_guest_attempt_enrollment' ), 11, 3 );
 			add_action( 'tutor_after_enrolled', array( $this, 'handle_after_enrollment_completed' ), 10, 3 );
+
+			// Step 3.4c: PMPro Critical Filter Hooks for Dynamic Pricing (Zero-Delay Architecture)
+			add_filter( 'pmpro_checkout_level', array( $this, 'filter_checkout_level_sale_price' ), 999, 1 );
+			add_filter( 'pmpro_level_cost_text', array( $this, 'filter_level_cost_text_sale_price' ), 10, 4 );
+			add_filter( 'pmpro_email_data', array( $this, 'filter_email_data_sale_price' ), 10, 2 );
+			add_action( 'pmpro_invoice_bullets_bottom', array( $this, 'filter_invoice_sale_note' ), 10, 1 );
+			
+			// Display notices on PMPro level edit page
+			add_action( 'pmpro_membership_level_after_general_information', array( $this, 'display_course_association_notice' ), 10 );
+			add_action( 'pmpro_membership_level_after_billing_details_settings', array( $this, 'display_sale_price_notice_on_level_edit' ), 10 );
         }
     }
 
@@ -1890,16 +1900,12 @@ class PaidMembershipsPro {
 
         // Get sale meta (stored by REST controller and reconciliation logic)
         $sale_price = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', true );
-        $regular_initial = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_initial_payment', true );
         $regular_price_meta = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', true );
 
-        // Determine regular price (priority: regular_initial > regular_price_meta > level.initial_payment)
-        $regular = ! empty( $regular_initial )
-            ? floatval( $regular_initial )
-            : ( ! empty( $regular_price_meta )
-                ? floatval( $regular_price_meta )
-                : floatval( $level->initial_payment )
-            );
+        // Determine regular price (priority: regular_price_meta > level.initial_payment)
+        $regular = ! empty( $regular_price_meta )
+            ? floatval( $regular_price_meta )
+            : floatval( $level->initial_payment );
 
         // Check if sale is active (uses helper method below)
         if ( $this->is_sale_active( $level_id, $sale_price, $regular ) ) {
@@ -1958,6 +1964,324 @@ class PaidMembershipsPro {
         }
 
         return ( $now >= $from_timestamp && $now <= $to_timestamp );
+    }
+
+    /**
+     * Filter PMPro checkout level to apply sale price at checkout time.
+     *
+     * This ensures customers are charged the correct price based on
+     * real-time sale schedule, regardless of database initial_payment value.
+     *
+     * @since 1.5.0
+     * @param object $level PMPro level object
+     * @return object Modified level object
+     */
+    public function filter_checkout_level_sale_price( $level ) {
+        if ( empty( $level->id ) ) {
+            return $level;
+        }
+
+        $active_price = $this->get_active_price_for_level( $level->id );
+
+        if ( $active_price['on_sale'] ) {
+            $level->initial_payment = $active_price['price'];
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[TP-PMPRO] checkout_sale_applied level_id=%d sale_price=%s regular_price=%s',
+                    $level->id,
+                    $active_price['price'],
+                    $active_price['regular_price']
+                ) );
+            }
+        }
+
+        return $level;
+    }
+
+    /**
+     * Filter PMPro level cost text to show sale price with strikethrough.
+     *
+     * Applies to PMPro's membership levels page, account page, and other
+     * locations where PMPro renders pricing.
+     *
+     * @since 1.5.0
+     * @param string $text  Cost text HTML
+     * @param object $level PMPro level object
+     * @param array  $tags  Template tags
+     * @param bool   $short Whether to show short version
+     * @return string Modified cost text HTML
+     */
+    public function filter_level_cost_text_sale_price( $text, $level, $tags, $short ) {
+        if ( empty( $level->id ) ) {
+            return $text;
+        }
+
+        $active_price = $this->get_active_price_for_level( $level->id );
+
+        if ( $active_price['on_sale'] && function_exists( 'pmpro_formatPrice' ) ) {
+            $sale_formatted = pmpro_formatPrice( $active_price['price'] );
+            $regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
+
+            // Replace regular price with strikethrough + sale price
+            $text = str_replace(
+                $regular_formatted,
+                '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . $sale_formatted,
+                $text
+            );
+        }
+
+        return $text;
+    }
+
+    /**
+     * Filter PMPro email data to apply sale price in confirmation emails.
+     *
+     * @since 1.5.0
+     * @param array  $data  Email template data
+     * @param object $email PMPro email object
+     * @return array Modified email data
+     */
+    public function filter_email_data_sale_price( $data, $email ) {
+        // PMPro emails include membership level data
+        if ( ! empty( $data['membership_level'] ) && ! empty( $data['membership_level']->id ) ) {
+            $level_id = $data['membership_level']->id;
+            $active_price = $this->get_active_price_for_level( $level_id );
+
+            if ( $active_price['on_sale'] ) {
+                $data['membership_level']->initial_payment = $active_price['price'];
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( sprintf(
+                        '[TP-PMPRO] email_sale_applied level_id=%d sale_price=%s',
+                        $level_id,
+                        $active_price['price']
+                    ) );
+                }
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Add promotional price note to PMPro invoices when sale is active.
+     *
+     * @since 1.5.0
+     * @param object $order PMPro order object
+     * @return void
+     */
+    public function filter_invoice_sale_note( $order ) {
+        if ( empty( $order->membership_id ) ) {
+            return;
+        }
+
+        $active_price = $this->get_active_price_for_level( $order->membership_id );
+
+        if ( $active_price['on_sale'] && function_exists( 'pmpro_formatPrice' ) ) {
+            $regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
+            echo '<li><strong>' . esc_html__( 'Promotional Price Applied', 'tutorpress-pmpro' ) . '</strong> (' . esc_html__( 'Regular', 'tutorpress-pmpro' ) . ': ' . esc_html( $regular_formatted ) . ')</li>';
+        }
+    }
+
+    /**
+     * Display course association notice on PMPro level edit page.
+     *
+     * Shows at the top of General Information section for all TutorPress-managed levels.
+     *
+     * @since 1.5.0
+     * @return void
+     */
+    public function display_course_association_notice() {
+        // Only run on level edit page
+        if ( ! \TUTOR\Input::has( 'edit' ) ) {
+            return;
+        }
+
+        $level_id = intval( \TUTOR\Input::sanitize_request_data( 'edit' ) );
+        if ( $level_id <= 0 ) {
+            return;
+        }
+
+        // Check if this level is associated with a TutorPress course
+        $course_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true );
+
+        if ( empty( $course_id ) ) {
+            return; // Not a TutorPress-managed level
+        }
+
+        $course_title = get_the_title( $course_id );
+        $course_edit_url = admin_url( 'post.php?post=' . $course_id . '&action=edit' );
+        
+        ?>
+        <tr>
+            <td colspan="2">
+                <div class="pmpro_course_association_notice" style="background: #f7f7f7; border-left: 4px solid #72aee6; padding: 12px 15px; margin: 10px 0;">
+                    <p style="margin: 0; font-size: 13px; color: #333;">
+                        <span class="dashicons dashicons-welcome-learn-more" style="font-size: 16px; vertical-align: middle; color: #72aee6;"></span>
+                        <strong><?php esc_html_e( 'TutorPress Course Level', 'tutorpress-pmpro' ); ?></strong>
+                        <br>
+                        <span style="margin-left: 22px; color: #666;">
+                            <?php 
+                            printf(
+                                __( 'This membership level is managed by TutorPress for: %s', 'tutorpress-pmpro' ),
+                                '<a href="' . esc_url( $course_edit_url ) . '" target="_blank" style="text-decoration: none;">' . esc_html( $course_title ) . ' <span class="dashicons dashicons-external" style="font-size: 14px; text-decoration: none;"></span></a>'
+                            );
+                            ?>
+                        </span>
+                    </p>
+                </div>
+            </td>
+        </tr>
+        <?php
+    }
+
+    /**
+     * Display sale price notice on PMPro level edit page.
+     *
+     * Shows in Billing Details section when a sale exists (active or scheduled),
+     * including sale price details and schedule.
+     *
+     * @since 1.5.0
+     * @return void
+     */
+    public function display_sale_price_notice_on_level_edit() {
+        // Only run on level edit page
+        if ( ! \TUTOR\Input::has( 'edit' ) ) {
+            return;
+        }
+
+        $level_id = intval( \TUTOR\Input::sanitize_request_data( 'edit' ) );
+        if ( $level_id <= 0 ) {
+            return;
+        }
+
+        // Check if this level is associated with a TutorPress course
+        $course_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true );
+
+        if ( empty( $course_id ) ) {
+            return; // Not a TutorPress-managed level
+        }
+
+        // Check if sale price exists in meta
+        $sale_price = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', true );
+        $regular_price_meta = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', true );
+        
+        if ( empty( $sale_price ) || empty( $regular_price_meta ) || floatval( $regular_price_meta ) <= 0 ) {
+            return; // No sale configured
+        }
+        
+        $regular_price = floatval( $regular_price_meta );
+
+        // Get sale schedule
+        $sale_from = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from', true );
+        $sale_to = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to', true );
+
+        // Determine sale status (active, scheduled, or expired)
+        $sale_status = 'active'; // Default for open-ended sales
+        $schedule_text = '';
+        
+        if ( ! empty( $sale_from ) && ! empty( $sale_to ) ) {
+            // Get current time in GMT (matching storage format)
+            if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) ) {
+                $now = \Tutor\Helpers\DateTimeHelper::now()->format( 'U' );
+                $from_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_from )->format( 'U' );
+                $to_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_to )->format( 'U' );
+            } else {
+                $now = current_time( 'timestamp', true );
+                $from_timestamp = strtotime( $sale_from );
+                $to_timestamp = strtotime( $sale_to );
+            }
+
+            // Determine status
+            if ( $now < $from_timestamp ) {
+                $sale_status = 'scheduled';
+            } elseif ( $now > $to_timestamp ) {
+                // Sale expired - don't show notice
+                return;
+            } else {
+                $sale_status = 'active';
+            }
+
+            // Format dates for display in local timezone
+            if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) && method_exists( '\Tutor\Helpers\DateTimeHelper', 'get_gmt_to_user_timezone_date' ) ) {
+                $from_formatted = \Tutor\Helpers\DateTimeHelper::get_gmt_to_user_timezone_date( $sale_from, 'M j, Y g:i A' );
+                $to_formatted = \Tutor\Helpers\DateTimeHelper::get_gmt_to_user_timezone_date( $sale_to, 'M j, Y g:i A' );
+            } else {
+                // Fallback: Display as-is
+                $from_formatted = date( 'M j, Y g:i A', $from_timestamp );
+                $to_formatted = date( 'M j, Y g:i A', $to_timestamp );
+            }
+
+            if ( $sale_status === 'scheduled' ) {
+                $schedule_text = sprintf( 
+                    __( 'Scheduled: %s to %s', 'tutorpress-pmpro' ), 
+                    $from_formatted, 
+                    $to_formatted 
+                );
+            } else {
+                $schedule_text = sprintf( 
+                    __( 'Active from %s to %s', 'tutorpress-pmpro' ), 
+                    $from_formatted, 
+                    $to_formatted 
+                );
+            }
+        } else {
+            $schedule_text = __( 'Open-ended (no expiration)', 'tutorpress-pmpro' );
+        }
+
+        $sale_price_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( floatval( $sale_price ) ) : '$' . number_format( floatval( $sale_price ), 2 );
+        $regular_price_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( $regular_price ) : '$' . number_format( $regular_price, 2 );
+
+        $course_title = get_the_title( $course_id );
+        $course_edit_url = admin_url( 'post.php?post=' . $course_id . '&action=edit' );
+        
+        // Different styling for scheduled vs active sales
+        $bg_color = ( $sale_status === 'scheduled' ) ? '#fff3cd' : '#d7f1ff';
+        $border_color = ( $sale_status === 'scheduled' ) ? '#ffc107' : '#0073aa';
+        $heading_color = ( $sale_status === 'scheduled' ) ? '#856404' : '#0073aa';
+        $heading_text = ( $sale_status === 'scheduled' ) ? __( 'Scheduled Sale', 'tutorpress-pmpro' ) : __( 'Sale Price Active', 'tutorpress-pmpro' );
+        $icon = ( $sale_status === 'scheduled' ) ? 'clock' : 'tag';
+        
+        ?>
+        <div class="pmpro_sale_price_notice" style="background: <?php echo esc_attr( $bg_color ); ?>; border-left: 4px solid <?php echo esc_attr( $border_color ); ?>; padding: 12px 15px; margin-top: 20px;">
+            <h3 style="margin-top: 0; color: <?php echo esc_attr( $heading_color ); ?>;">
+                <span class="dashicons dashicons-<?php echo esc_attr( $icon ); ?>" style="font-size: 20px; vertical-align: middle;"></span>
+                <?php echo esc_html( $heading_text ); ?>
+            </h3>
+            <p style="margin: 8px 0;">
+                <strong><?php esc_html_e( 'Regular Price:', 'tutorpress-pmpro' ); ?></strong> 
+                <span style="text-decoration: line-through; opacity: 0.6;"><?php echo esc_html( $regular_price_formatted ); ?></span>
+                &nbsp;&nbsp;
+                <strong><?php esc_html_e( 'Sale Price:', 'tutorpress-pmpro' ); ?></strong> 
+                <span style="color: <?php echo esc_attr( $heading_color ); ?>; font-weight: bold;"><?php echo esc_html( $sale_price_formatted ); ?></span>
+            </p>
+            <?php if ( $schedule_text ) : ?>
+                <p style="margin: 8px 0;">
+                    <strong><?php esc_html_e( 'Schedule:', 'tutorpress-pmpro' ); ?></strong> 
+                    <?php echo esc_html( $schedule_text ); ?>
+                </p>
+            <?php endif; ?>
+            <p style="margin: 8px 0; font-style: italic; color: #666;">
+                <?php 
+                printf(
+                    __( 'This sale is managed in the associated course: %s', 'tutorpress-pmpro' ),
+                    '<a href="' . esc_url( $course_edit_url ) . '" target="_blank">' . esc_html( $course_title ) . '</a>'
+                );
+                ?>
+            </p>
+            <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
+                <strong><?php esc_html_e( 'Note:', 'tutorpress-pmpro' ); ?></strong>
+                <?php 
+                if ( $sale_status === 'scheduled' ) {
+                    esc_html_e( 'The sale price will automatically apply when the scheduled time begins. Until then, customers will be charged the regular price.', 'tutorpress-pmpro' );
+                } else {
+                    esc_html_e( 'The Initial Payment field above shows the regular price. Customers will automatically be charged the sale price at checkout.', 'tutorpress-pmpro' );
+                }
+                ?>
+            </p>
+        </div>
+        <?php
     }
 }
 
