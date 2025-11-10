@@ -84,8 +84,8 @@ class PaidMembershipsPro {
 			add_action( 'tutor_after_enrolled', array( $this, 'handle_after_enrollment_completed' ), 10, 3 );
 
 			// Step 3.4c: PMPro Critical Filter Hooks for Dynamic Pricing (Zero-Delay Architecture)
-			add_filter( 'pmpro_checkout_level', array( $this, 'filter_checkout_level_sale_price' ), 999, 1 );
-			add_filter( 'pmpro_level_cost_text', array( $this, 'filter_level_cost_text_sale_price' ), 10, 4 );
+			add_filter( 'pmpro_checkout_level', array( $this, 'filter_checkout_level_sale_price' ), 10, 1 ); // Changed priority to 10
+			add_filter( 'pmpro_level_cost_text', array( $this, 'filter_level_cost_text_sale_price' ), 999, 4 ); // Changed priority to 999 to run AFTER
 			add_filter( 'pmpro_email_data', array( $this, 'filter_email_data_sale_price' ), 10, 2 );
 			add_action( 'pmpro_invoice_bullets_bottom', array( $this, 'filter_invoice_sale_note' ), 10, 1 );
 			
@@ -2005,6 +2005,9 @@ class PaidMembershipsPro {
      * Applies to PMPro's membership levels page, account page, and other
      * locations where PMPro renders pricing.
      *
+     * IMPORTANT: Sale only applies to initial payment, never to recurring price.
+     * This filter runs at priority 999 to ensure it runs AFTER checkout_level filter.
+     *
      * @since 1.5.0
      * @param string $text  Cost text HTML
      * @param object $level PMPro level object
@@ -2019,11 +2022,44 @@ class PaidMembershipsPro {
 
         $active_price = $this->get_active_price_for_level( $level->id );
 
-        if ( $active_price['on_sale'] && function_exists( 'pmpro_formatPrice' ) ) {
-            $sale_formatted = pmpro_formatPrice( $active_price['price'] );
-            $regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
+        if ( ! $active_price['on_sale'] || ! function_exists( 'pmpro_formatPrice' ) ) {
+            return $text;
+        }
 
-            // Replace regular price with strikethrough + sale price
+        $sale_formatted = pmpro_formatPrice( $active_price['price'] );
+        $regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
+
+        // Check if this is a subscription (has recurring payments)
+        $is_subscription = ! empty( $level->billing_amount ) && ! empty( $level->cycle_number );
+
+        if ( $is_subscription ) {
+            // For subscriptions: Find where the sale price appears and add strikethrough regular price before it
+            // Two patterns:
+            // 1. Full format: "$20.00 now" → "~~$30.00~~ $20.00 now"
+            // 2. Short format: "$20.00 per Month" → "~~$30.00~~ $20.00 now and then $30.00 per Month"
+            
+            // Try full format first (with "now")
+            $pattern_full = '/' . preg_quote( $sale_formatted, '/' ) . '(\s+now)/i';
+            if ( preg_match( $pattern_full, $text ) ) {
+                $replacement = '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . $sale_formatted . '$1';
+                $text = preg_replace( $pattern_full, $replacement, $text, 1 );
+            } else {
+                // Short format - reconstruct the full text
+                // PMPro might show just "$20 per Month" (the recurring), but we need to show initial + recurring
+                $recurring_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( $level->billing_amount ) : '';
+                $cycle_text = '';
+                
+                if ( ! empty( $level->cycle_number ) && ! empty( $level->cycle_period ) ) {
+                    $cycle_text = ' per ' . $level->cycle_period;
+                }
+                
+                // Build: "~~$30~~ $20 now and then $30 per Month"
+                $text = '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . 
+                        $sale_formatted . ' now and then ' . $recurring_formatted . $cycle_text . '.';
+            }
+        } else {
+            // For one-time purchases: Replace regular price with strikethrough regular + sale
+            // PMPro shows the regular price from DB, we need to show it struck through + sale price
             $text = str_replace(
                 $regular_formatted,
                 '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . $sale_formatted,
