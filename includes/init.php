@@ -925,19 +925,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$course_id = (int) $course_id;
 		if ( ! is_array( $state ) ) { $state = array(); }
 		$ids = isset( $state['valid_ids'] ) ? $state['valid_ids'] : array();
-		if ( empty( $ids ) ) {
-			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-			return;
+		
+		if ( ! empty( $ids ) ) {
+			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+			}
+			foreach ( $ids as $lid ) {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
+				$this->log( '[TP-PMPRO] handle_free_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
+			}
+			$this->log( '[TP-PMPRO] handle_free_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
 		}
-		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
-		}
-		foreach ( $ids as $lid ) {
-			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
-			$this->log( '[TP-PMPRO] handle_free_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
-		}
+		
 		delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-		$this->log( '[TP-PMPRO] handle_free_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
+		
+		// Phase 5: Delete course level group (now empty or already empty)
+		self::delete_course_level_group_if_empty( $course_id );
 	}
 
 	/**
@@ -1053,6 +1056,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 			}
 			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 			$this->log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' course=' . $course_id );
+			
+			// Phase 5: Add level to course group
+			self::add_level_to_course_group( $course_id, $level_id );
 			
 			// Step 3.5: Handle sale price for one-time purchase
 			$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
@@ -1214,19 +1220,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$state = array();
 		}
 		$ids = isset( $state['valid_ids'] ) ? $state['valid_ids'] : array();
-		if ( empty( $ids ) ) {
-			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-			return;
+		
+		if ( ! empty( $ids ) ) {
+			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+			}
+			foreach ( $ids as $lid ) {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
+				$this->log( '[TP-PMPRO] handle_membership_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
+			}
+			$this->log( '[TP-PMPRO] handle_membership_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
 		}
-		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
-		}
-		foreach ( $ids as $lid ) {
-			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
-			$this->log( '[TP-PMPRO] handle_membership_branch deleted_level_id=' . (int) $lid . ' course=' . $course_id );
-		}
+		
 		delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-		$this->log( '[TP-PMPRO] handle_membership_branch cleared all levels; course=' . $course_id . ' deleted_count=' . count( $ids ) );
+		
+		// Phase 5: Delete course level group (now empty or already empty)
+		self::delete_course_level_group_if_empty( $course_id );
 	}
 
 	/**
@@ -1286,6 +1295,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 					}
 					\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 					
+					// Phase 5: Add level to course group
+					self::add_level_to_course_group( $course_id, $level_id );
+					
 					// Handle sale price for the newly created one-time level
 					$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
 					
@@ -1314,6 +1326,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 					array( '%s', '%s' ),
 					array( '%d' )
 				);
+				
+				// Phase 5: Ensure level is in course group
+				self::add_level_to_course_group( $course_id, $existing_level_id );
 				
 				// Handle sale price (which will also update initial_payment)
 				$this->handle_sale_price_for_one_time( $course_id, $existing_level_id, $regular_price );
@@ -1388,6 +1403,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		// Clear course meta after cleanup
 		delete_post_meta( $post_id, '_tutorpress_pmpro_levels' );
+		
+		// Phase 5: Delete course level group if empty
+		self::delete_course_level_group_if_empty( $post_id );
 	}
 
 	/**
@@ -1603,6 +1621,128 @@ if ( ! defined( 'ABSPATH' ) ) {
 	private function log( $message ) {
 		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 			error_log( $message );
+		}
+	}
+
+	// ===========================
+	// Phase 5: PMPro Level Groups
+	// ===========================
+	//
+	// PMPro has native Level Groups (wp_pmpro_groups, wp_pmpro_membership_levels_groups).
+	// We auto-create a group per course to organize its pricing levels.
+	//
+	// Note: PMPro does NOT have a "level type" field. Type (one-time vs recurring)
+	// is inferred dynamically from billing configuration (billing_amount, cycle_number).
+	// We do NOT add custom type meta - we use PMPro's native inference.
+
+	/**
+	 * Get or create a level group for a course.
+	 *
+	 * Creates a group named "Course: {Course Title}" with allow_multiple_selections = false
+	 * so users can only select one pricing option per course.
+	 *
+	 * @since 1.6.0
+	 * @param int $course_id The course ID
+	 * @return int|false The group ID, or false on failure
+	 */
+	public static function get_or_create_course_level_group( $course_id ) {
+		if ( ! function_exists( 'pmpro_create_level_group' ) ) {
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (PMPro groups not available); course=' . $course_id );
+			}
+			return false;
+		}
+
+		// Check if group already exists (stored in course meta)
+		$existing_group_id = get_post_meta( $course_id, '_tutorpress_pmpro_group_id', true );
+		if ( $existing_group_id && function_exists( 'pmpro_get_level_group' ) ) {
+			$group = pmpro_get_level_group( $existing_group_id );
+			if ( $group ) {
+				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+					error_log( '[TP-PMPRO] get_or_create_course_level_group found_existing_group=' . $existing_group_id . ' course=' . $course_id );
+				}
+				return (int) $existing_group_id;
+			}
+		}
+
+		// Create new group
+		$course_title = get_the_title( $course_id );
+		$group_name = sprintf( __( 'Course: %s', 'tutorpress-pmpro' ), $course_title );
+		
+		// allow_multiple_selections = false: users can only pick ONE pricing option per course
+		$group_id = pmpro_create_level_group( $group_name, false );
+
+		if ( $group_id ) {
+			update_post_meta( $course_id, '_tutorpress_pmpro_group_id', $group_id );
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] get_or_create_course_level_group created_group=' . $group_id . ' name="' . $group_name . '" course=' . $course_id );
+			}
+			return (int) $group_id;
+		}
+
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+			error_log( '[TP-PMPRO] get_or_create_course_level_group failed to create group; course=' . $course_id );
+		}
+		return false;
+	}
+
+	/**
+	 * Add a membership level to the course's level group.
+	 *
+	 * @since 1.6.0
+	 * @param int $course_id The course ID
+	 * @param int $level_id The level ID
+	 * @return void
+	 */
+	public static function add_level_to_course_group( $course_id, $level_id ) {
+		if ( ! function_exists( 'pmpro_add_level_to_group' ) ) {
+			return;
+		}
+
+		$group_id = self::get_or_create_course_level_group( $course_id );
+		if ( ! $group_id ) {
+			return;
+		}
+
+		pmpro_add_level_to_group( $level_id, $group_id );
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+			error_log( '[TP-PMPRO] add_level_to_course_group level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id );
+		}
+	}
+
+
+	/**
+	 * Delete the level group for a course if it's empty.
+	 *
+	 * Called when a course is deleted or has no more levels.
+	 *
+	 * @since 1.6.0
+	 * @param int $course_id The course ID
+	 * @return void
+	 */
+	public static function delete_course_level_group_if_empty( $course_id ) {
+		if ( ! function_exists( 'pmpro_delete_level_group' ) || ! function_exists( 'pmpro_get_level_ids_for_group' ) ) {
+			return;
+		}
+
+		$group_id = get_post_meta( $course_id, '_tutorpress_pmpro_group_id', true );
+		if ( ! $group_id ) {
+			return;
+		}
+
+		$levels_in_group = pmpro_get_level_ids_for_group( $group_id );
+		if ( empty( $levels_in_group ) ) {
+			$deleted = pmpro_delete_level_group( $group_id );
+			if ( $deleted ) {
+				delete_post_meta( $course_id, '_tutorpress_pmpro_group_id' );
+				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+					error_log( '[TP-PMPRO] delete_course_level_group_if_empty deleted_group=' . $group_id . ' course=' . $course_id );
+				}
+			}
+		} else {
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] delete_course_level_group_if_empty group_not_empty=' . $group_id . ' level_count=' . count( $levels_in_group ) . ' course=' . $course_id );
+			}
 		}
 	}
 

@@ -40,6 +40,11 @@ class PMPro_Level_Cleanup {
             $wpdb->delete( $wpdb->pmpro_memberships_categories, array( 'membership_id' => $level_id ), array( '%d' ) );
         }
 
+        // Phase 5: Remove from level groups.
+        if ( isset( $wpdb->pmpro_membership_levels_groups ) ) {
+            $wpdb->delete( $wpdb->pmpro_membership_levels_groups, array( 'level' => $level_id ), array( '%d' ) );
+        }
+
         // Optionally delete the level itself.
         if ( $delete_level_if_exists && isset( $wpdb->pmpro_membership_levels ) ) {
             $wpdb->delete( $wpdb->pmpro_membership_levels, array( 'id' => $level_id ), array( '%d' ) );

@@ -511,15 +511,22 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			// Set reverse lookup on PMPro level meta
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 				update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $object_id );
+				update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
 			} else {
 				// Fallback: try PMPro meta function names or generic postmeta on pmpro level table
 				try {
 					if ( function_exists( 'add_pmpro_membership_level_meta' ) ) {
 						add_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $object_id );
+						add_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
 					}
 				} catch ( Exception $e ) {
 					// ignore
 				}
+			}
+
+			// Phase 5: Add level to course group
+			if ( class_exists( '\\TUTORPRESS_PMPRO\\Init' ) ) {
+				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $level_id );
 			}
 
 			// Persist any UI-only meta (sale_price etc.) if present in mapper output
