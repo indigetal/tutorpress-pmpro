@@ -132,6 +132,8 @@ class PaidMembershipsPro {
     /**
      * Return PMPro minimal price string when available.
      * Falls back to original price if engine/levels are not applicable.
+     * 
+     * Handles sale prices with strikethrough formatting for dashboard display.
      *
      * @param mixed $price
      * @param int   $course_id
@@ -146,11 +148,121 @@ class PaidMembershipsPro {
             return $price;
         }
 
-        if ( class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Pricing' ) ) {
-            $pmpro_price = \TUTORPRESS_PMPRO\PMPro_Pricing::get_formatted_price( $course_id );
-            if ( is_string( $pmpro_price ) && $pmpro_price !== '' ) {
-                return $pmpro_price;
+        // Respect free courses
+        if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
+            return $price;
+        }
+
+        // Get course-specific levels (check multiple sources)
+        global $wpdb;
+        $level_ids = array();
+        
+        // Primary: pmpro_memberships_pages table
+        if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+            $level_ids = $wpdb->get_col(
+                $wpdb->prepare(
+                    "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
+                    $course_id
+                )
+            );
+        }
+        
+        // Secondary: course meta
+        $meta_ids = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+        if ( is_array( $meta_ids ) && ! empty( $meta_ids ) ) {
+            $level_ids = array_merge( $level_ids, $meta_ids );
+        }
+        
+        // Tertiary: reverse meta lookup (tutorpress_course_id)
+        if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+            $reverse_ids = $wpdb->get_col(
+                $wpdb->prepare(
+                    "SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
+                    'tutorpress_course_id',
+                    (string) $course_id
+                )
+            );
+            $level_ids = array_merge( $level_ids, $reverse_ids );
+        }
+        
+        // Remove duplicates and ensure integers
+        $level_ids = array_map( 'intval', array_unique( $level_ids ) );
+        $level_ids = array_filter( $level_ids ); // Remove zeros
+
+        if ( empty( $level_ids ) ) {
+            return $price;
+        }
+
+        // Get currency formatting
+        $cur = $this->get_pmpro_currency();
+        $symbol = isset( $cur['currency_symbol'] ) ? $cur['currency_symbol'] : '';
+        $pos    = isset( $cur['currency_position'] ) ? $cur['currency_position'] : 'left';
+
+        $format_price = function( $amt ) use ( $symbol, $pos ) {
+            $amt = number_format_i18n( (float) $amt, 2 );
+            if ( $symbol ) {
+                if ( 'left_space' === $pos ) return $symbol . ' ' . $amt;
+                if ( 'right' === $pos )      return $amt . $symbol;
+                if ( 'right_space' === $pos )return $amt . ' ' . $symbol;
             }
+            return $symbol . $amt;
+        };
+
+        // Build price string with sale support
+        $price_strings = array();
+        foreach ( $level_ids as $level_id ) {
+            $level = pmpro_getLevel( (int) $level_id );
+            if ( ! $level ) {
+                continue;
+            }
+
+            // Use dynamic pricing helper (handles sale schedule)
+            $active_price_data = $this->get_active_price_for_level( (int) $level_id );
+            $active_price = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : (float) $level->initial_payment;
+            $is_on_sale = ! empty( $active_price_data['on_sale'] );
+            $regular_price = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $active_price;
+
+            // Format price string
+            if ( $is_on_sale ) {
+                // Sale price with strikethrough regular price
+                $price_strings[] = '<span class="tutor-course-price"><del>' . esc_html( $format_price( $regular_price ) ) . '</del> <strong>' . esc_html( $format_price( $active_price ) ) . '</strong></span>';
+            } else {
+                // Regular price
+                $price_strings[] = '<span class="tutor-course-price">' . esc_html( $format_price( $active_price ) ) . '</span>';
+            }
+
+            // Add subscription info if applicable
+            if ( ! empty( $level->billing_amount ) && ! empty( $level->cycle_number ) ) {
+                $cycle_period = strtolower( $level->cycle_period );
+                $period_label = '';
+                if ( 'day' === $cycle_period ) {
+                    $period_label = __( 'day', 'tutorpress-pmpro' );
+                } elseif ( 'week' === $cycle_period ) {
+                    $period_label = __( 'week', 'tutorpress-pmpro' );
+                } elseif ( 'month' === $cycle_period ) {
+                    $period_label = __( 'month', 'tutorpress-pmpro' );
+                } elseif ( 'year' === $cycle_period ) {
+                    $period_label = __( 'year', 'tutorpress-pmpro' );
+                } else {
+                    $period_label = $cycle_period;
+                }
+
+                $billing_amount = (float) $level->billing_amount;
+                $last_price = array_pop( $price_strings );
+                $price_strings[] = $last_price . ' <span class="tutor-course-price-period">' . esc_html( sprintf( __( 'then %s per %s', 'tutorpress-pmpro' ), $format_price( $billing_amount ), $period_label ) ) . '</span>';
+            } else {
+                // One-time purchase
+                $last_price = array_pop( $price_strings );
+                $price_strings[] = $last_price . ' <span class="tutor-course-price-period">' . esc_html__( 'one-time', 'tutorpress-pmpro' ) . '</span>';
+            }
+        }
+
+        if ( ! empty( $price_strings ) ) {
+            // Return first price (or "Starting at" if multiple)
+            if ( count( $price_strings ) > 1 ) {
+                return '<span class="tutor-course-price-label">' . esc_html__( 'Starting at', 'tutorpress-pmpro' ) . ' </span>' . $price_strings[0];
+            }
+            return $price_strings[0];
         }
 
         return $price;
