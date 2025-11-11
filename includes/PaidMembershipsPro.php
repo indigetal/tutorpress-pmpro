@@ -1368,7 +1368,11 @@ class PaidMembershipsPro {
     }
 
 	/**
-	 * Map PMPro membership level IDs to Tutor LMS course IDs using pmpro_memberships_pages.
+	 * Map PMPro membership level IDs to Tutor LMS course IDs.
+	 * 
+	 * Checks multiple sources:
+	 * 1. pmpro_memberships_pages table (primary)
+	 * 2. tutorpress_course_id level meta (reverse lookup for course-specific levels)
 	 *
 	 * @param array|int $level_ids
 	 * @return array<int> course IDs
@@ -1389,22 +1393,56 @@ class PaidMembershipsPro {
 			return array();
 		}
 
-		// Build a prepared IN() clause and include dynamic post type.
-		$post_type   = tutor()->course_post_type;
-		$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
-		$sql = "
-			SELECT mp.page_id
-			FROM {$wpdb->pmpro_memberships_pages} mp
-			LEFT JOIN {$wpdb->posts} p ON mp.page_id = p.ID
-			WHERE mp.membership_id IN ( {$placeholders} )
-			AND p.post_type = %s
-			AND p.post_status = 'publish'
-			GROUP BY mp.page_id
-		";
-		$params = array_merge( array( $sql ), $level_ids, array( $post_type ) );
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
-		$course_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
-		$course_ids = is_array( $course_ids ) ? array_map( 'intval', $course_ids ) : array();
+		$course_ids = array();
+
+		// Primary: pmpro_memberships_pages table
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$post_type   = tutor()->course_post_type;
+			$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
+			$sql = "
+				SELECT mp.page_id
+				FROM {$wpdb->pmpro_memberships_pages} mp
+				LEFT JOIN {$wpdb->posts} p ON mp.page_id = p.ID
+				WHERE mp.membership_id IN ( {$placeholders} )
+				AND p.post_type = %s
+				AND p.post_status = 'publish'
+				GROUP BY mp.page_id
+			";
+			$params = array_merge( array( $sql ), $level_ids, array( $post_type ) );
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
+			$course_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			$course_ids = is_array( $course_ids ) ? array_map( 'intval', $course_ids ) : array();
+		}
+
+		// Secondary: Reverse meta lookup (tutorpress_course_id) for course-specific levels
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
+			$sql = "
+				SELECT DISTINCT CAST(meta_value AS UNSIGNED) as course_id
+				FROM {$wpdb->pmpro_membership_levelmeta}
+				WHERE meta_key = 'tutorpress_course_id'
+				AND pmpro_membership_level_id IN ( {$placeholders} )
+				AND CAST(meta_value AS UNSIGNED) > 0
+			";
+			$params = array_merge( array( $sql ), $level_ids );
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
+			$reverse_course_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			if ( is_array( $reverse_course_ids ) && ! empty( $reverse_course_ids ) ) {
+				// Verify these are valid published courses
+				$reverse_course_ids = array_map( 'intval', $reverse_course_ids );
+				$valid_courses = get_posts( array(
+					'post_type'   => tutor()->course_post_type,
+					'post_status' => 'publish',
+					'post__in'    => $reverse_course_ids,
+					'fields'      => 'ids',
+					'posts_per_page' => -1,
+				) );
+				$course_ids = array_merge( $course_ids, $valid_courses );
+			}
+		}
+
+		// Remove duplicates and return
+		$course_ids = array_values( array_unique( array_map( 'intval', $course_ids ) ) );
 
 		return $course_ids;
 	}
@@ -1603,6 +1641,10 @@ class PaidMembershipsPro {
 			return;
 		}
 
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+			error_log( '[TP-PMPRO] pmpro_after_all_membership_level_changes fired for ' . count( $pmpro_old_user_levels ) . ' user(s)' );
+		}
+
 		foreach ( $pmpro_old_user_levels as $user_id => $old_levels ) {
 			// Current level IDs for user
 			$current_levels = pmpro_getMembershipLevelsForUser( $user_id );
@@ -1611,8 +1653,26 @@ class PaidMembershipsPro {
 			// Old level IDs
 			$old_level_ids = ! empty( $old_levels ) ? wp_list_pluck( $old_levels, 'ID' ) : array();
 
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( sprintf(
+					'[TP-PMPRO] User %d: old_levels=%s, current_levels=%s',
+					$user_id,
+					implode( ',', $old_level_ids ),
+					implode( ',', $current_level_ids )
+				) );
+			}
+
 			$current_courses = $this->get_courses_for_levels( $current_level_ids );
 			$old_courses     = $this->get_courses_for_levels( $old_level_ids );
+
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( sprintf(
+					'[TP-PMPRO] User %d: old_courses=%s, current_courses=%s',
+					$user_id,
+					implode( ',', $old_courses ),
+					implode( ',', $current_courses )
+				) );
+			}
 
 			// Filter out public/free courses
 			$current_courses = array_values( array_filter( $current_courses, function ( $cid ) {
@@ -1626,10 +1686,34 @@ class PaidMembershipsPro {
 			$courses_to_unenroll = array_diff( $old_courses, $current_courses );
 			$courses_to_enroll   = array_diff( $current_courses, $old_courses );
 
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				if ( ! empty( $courses_to_unenroll ) ) {
+					error_log( sprintf(
+						'[TP-PMPRO] User %d: courses_to_unenroll=%s',
+						$user_id,
+						implode( ',', $courses_to_unenroll )
+					) );
+				}
+				if ( ! empty( $courses_to_enroll ) ) {
+					error_log( sprintf(
+						'[TP-PMPRO] User %d: courses_to_enroll=%s',
+						$user_id,
+						implode( ',', $courses_to_enroll )
+					) );
+				}
+			}
+
 			// Unenroll
 			foreach ( $courses_to_unenroll as $course_id ) {
 				if ( tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
 					tutor_utils()->cancel_course_enrol( $course_id, $user_id );
+					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+						error_log( sprintf(
+							'[TP-PMPRO] Unenrolled user %d from course %d (membership level removed)',
+							$user_id,
+							$course_id
+						) );
+					}
 				}
 			}
 

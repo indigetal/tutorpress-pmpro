@@ -70,6 +70,7 @@
 							
 							if ( $is_on_sale && $regular_initial > $display_initial ) {
 								// WITH SALE: Show "~~$100~~ $75 (then $50/Mo)"
+								// Always show recurring amount to clarify sale applies to initial only
 								// Show regular initial payment with strikethrough
 								$billing_text .= '<span class="tutor-fw-normal" style="text-decoration: line-through; opacity: 0.6; margin-right: 8px;">';
 									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
@@ -83,6 +84,18 @@
 										$billing_text .= $display_initial;
 									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 								$billing_text .= '</span>';
+								
+								// Always show recurring amount in parentheses for subscriptions with sale
+								// This clarifies that sale applies to initial payment, not recurring
+								$billing_text .= ' <span class="tutor-fs-6 tutor-color-muted">(';
+								$billing_text .= esc_html__( 'then', 'tutorpress-pmpro' ) . ' ';
+								$billing_text .= '<span class="tutor-fw-medium">';
+									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+										$billing_text .= $billing_amount;
+									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+								$billing_text .= '/' . substr( $level->cycle_period, 0, 2 );
+								$billing_text .= '</span>';
+								$billing_text .= ')</span>';
 							} else {
 								// NO SALE: Show initial payment if different from recurring
 								// If initial = recurring, just show recurring. Otherwise show "initial (then recurring)"
@@ -93,6 +106,17 @@
 											$billing_text .= $display_initial;
 										'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 									$billing_text .= '</span>';
+									
+									// Show recurring amount in parentheses
+									$billing_text .= ' <span class="tutor-fs-6 tutor-color-muted">(';
+									$billing_text .= esc_html__( 'then', 'tutorpress-pmpro' ) . ' ';
+									$billing_text .= '<span class="tutor-fw-medium">';
+										'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
+											$billing_text .= $billing_amount;
+										'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+									$billing_text .= '/' . substr( $level->cycle_period, 0, 2 );
+									$billing_text .= '</span>';
+									$billing_text .= ')</span>';
 								} else {
 									// Initial = recurring, just show recurring like "$50/Mo"
 									$billing_text .= '<span class="tutor-fw-bold">';
@@ -102,19 +126,6 @@
 									$billing_text .= '</span>';
 									$billing_text .= '<span class="tutor-fs-7 tutor-color-muted">/' . substr( $level->cycle_period, 0, 2 ) . '</span>';
 								}
-							}
-							
-							// Always show recurring amount in parentheses if initial != recurring
-							if ( $display_initial != $billing_amount ) {
-								$billing_text .= ' <span class="tutor-fs-6 tutor-color-muted">(';
-								$billing_text .= esc_html__( 'then', 'tutorpress-pmpro' ) . ' ';
-								$billing_text .= '<span class="tutor-fw-medium">';
-									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-										$billing_text .= $billing_amount;
-									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
-								$billing_text .= '/' . substr( $level->cycle_period, 0, 2 );
-								$billing_text .= '</span>';
-								$billing_text .= ')</span>';
 							}
 						} else {
 							// ONE-TIME PURCHASE
