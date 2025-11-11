@@ -736,8 +736,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	}
 
 	// Return the updated level using mapper
+	// Merge update_data with fetched level to ensure we have the latest values
+	// This prevents cache issues where pmpro_getLevel() might return stale data
 	$level = pmpro_getLevel( $plan_id );
-	$payload = $mapper->map_pmpro_to_ui( $level );
+	$updated_level = (object) array_merge( (array) $level, $update_data );
+	$payload = $mapper->map_pmpro_to_ui( $updated_level );
 
 	return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'PMPro membership level updated.', 'tutorpress-pmpro' ) ) );
 	}
