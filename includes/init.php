@@ -1641,6 +1641,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * Creates a group named "Course: {Course Title}" with allow_multiple_selections = false
 	 * so users can only select one pricing option per course.
 	 *
+	 * Also syncs the group name with the current course title to handle course renames.
+	 *
 	 * @since 1.6.0
 	 * @param int $course_id The course ID
 	 * @return int|false The group ID, or false on failure
@@ -1653,11 +1655,30 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return false;
 		}
 
+		// Get current course title (always fresh)
+		$course_title = get_the_title( $course_id );
+		$group_name = sprintf( __( 'Course: %s', 'tutorpress-pmpro' ), $course_title );
+
 		// Check if group already exists (stored in course meta)
 		$existing_group_id = get_post_meta( $course_id, '_tutorpress_pmpro_group_id', true );
 		if ( $existing_group_id && function_exists( 'pmpro_get_level_group' ) ) {
 			$group = pmpro_get_level_group( $existing_group_id );
 			if ( $group ) {
+				// Sync group name with current course title (handles course renames)
+				if ( $group->name !== $group_name ) {
+					global $wpdb;
+					$wpdb->update(
+						$wpdb->pmpro_groups,
+						array( 'name' => $group_name ),
+						array( 'id' => $existing_group_id ),
+						array( '%s' ),
+						array( '%d' )
+					);
+					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+						error_log( '[TP-PMPRO] get_or_create_course_level_group updated_group_name; group=' . $existing_group_id . ' old="' . $group->name . '" new="' . $group_name . '" course=' . $course_id );
+					}
+				}
+				
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 					error_log( '[TP-PMPRO] get_or_create_course_level_group found_existing_group=' . $existing_group_id . ' course=' . $course_id );
 				}
@@ -1666,9 +1687,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 
 		// Create new group
-		$course_title = get_the_title( $course_id );
-		$group_name = sprintf( __( 'Course: %s', 'tutorpress-pmpro' ), $course_title );
-		
 		// allow_multiple_selections = false: users can only pick ONE pricing option per course
 		$group_id = pmpro_create_level_group( $group_name, false );
 
