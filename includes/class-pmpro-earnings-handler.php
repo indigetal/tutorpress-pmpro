@@ -258,6 +258,8 @@ class PMPro_Earnings_Handler {
 	 * Creates a minimal order in Tutor's order tables for earning tracking.
 	 * Does NOT create full order UI to avoid conflicts with PMPro.
 	 *
+	 * Schema aligned with Tutor Core 3.0+ (wp_tutor_orders, wp_tutor_order_items, wp_tutor_ordermeta).
+	 *
 	 * @since 1.6.0
 	 *
 	 * @param array $args {
@@ -292,6 +294,7 @@ class PMPro_Earnings_Handler {
 		}
 
 		// Insert minimal order record.
+		$current_user_id = get_current_user_id();
 		$order_data = array(
 			'order_type'        => $args['order_type'],
 			'order_status'      => OrderModel::ORDER_COMPLETED,
@@ -299,13 +302,15 @@ class PMPro_Earnings_Handler {
 			'user_id'           => $args['user_id'],
 			'total_price'       => $args['amount'],
 			'subtotal_price'    => $args['amount'],
-			'regular_price'     => $args['amount'],
+			'pre_tax_price'     => $args['amount'],
+			'net_payment'       => $args['amount'],
 			'coupon_amount'     => 0,
 			'discount_amount'   => 0,
 			'tax_amount'        => 0,
 			'payment_method'    => 'pmpro',
 			'created_at_gmt'    => current_time( 'mysql', true ),
-			'order_key'         => 'pmpro_' . $args['pmpro_order_id'] . '_' . time(),
+			'created_by'        => $current_user_id ? $current_user_id : $args['user_id'],
+			'updated_by'        => $current_user_id ? $current_user_id : $args['user_id'],
 		);
 
 		$inserted = $wpdb->insert(
@@ -318,40 +323,50 @@ class PMPro_Earnings_Handler {
 				'%d', // user_id
 				'%f', // total_price
 				'%f', // subtotal_price
-				'%f', // regular_price
+				'%f', // pre_tax_price
+				'%f', // net_payment
 				'%f', // coupon_amount
 				'%f', // discount_amount
 				'%f', // tax_amount
 				'%s', // payment_method
 				'%s', // created_at_gmt
-				'%s', // order_key
+				'%d', // created_by
+				'%d', // updated_by
 			)
 		);
 
 		if ( ! $inserted ) {
+			error_log( '[TP-PMPRO Earnings] Failed to insert Tutor order. DB Error: ' . $wpdb->last_error );
 			return false;
 		}
 
 		$order_id = $wpdb->insert_id;
+		error_log( '[TP-PMPRO Earnings] Created Tutor order #' . $order_id . ' (type: ' . $args['order_type'] . ', amount: $' . $args['amount'] . ')' );
 
 		// Insert order item (course link).
 		$item_data = array(
 			'order_id'      => $order_id,
 			'item_id'       => $args['course_id'],
 			'regular_price' => $args['amount'],
-			'sale_price'    => $args['amount'],
-			'item_type'     => 'course',
+			'sale_price'    => (string) $args['amount'],
 		);
 
-		$wpdb->insert(
+		$item_inserted = $wpdb->insert(
 			$wpdb->prefix . 'tutor_order_items',
 			$item_data,
-			array( '%d', '%d', '%f', '%f', '%s' )
+			array( '%d', '%d', '%f', '%s' )
 		);
 
+		if ( ! $item_inserted ) {
+			error_log( '[TP-PMPRO Earnings] Failed to insert order item for order #' . $order_id . '. DB Error: ' . $wpdb->last_error );
+		} else {
+			$item_id = $wpdb->insert_id;
+			error_log( '[TP-PMPRO Earnings] Created order item #' . $item_id . ' for course ' . $args['course_id'] . ' in order #' . $order_id );
+		}
+
 		// Store cross-reference meta for bidirectional lookup.
-		$this->add_order_meta( $order_id, 'pmpro_order_id', $args['pmpro_order_id'] );
-		$this->add_order_meta( $order_id, 'pmpro_level_id', $args['pmpro_level_id'] );
+		$this->add_order_meta( $order_id, 'pmpro_order_id', $args['pmpro_order_id'], $args['user_id'] );
+		$this->add_order_meta( $order_id, 'pmpro_level_id', $args['pmpro_level_id'], $args['user_id'] );
 
 		return $order_id;
 	}
@@ -365,14 +380,39 @@ class PMPro_Earnings_Handler {
 	 * @return void
 	 */
 	private function calculate_and_store_earnings( $tutor_order_id ) {
+		global $wpdb;
+		
 		$earnings = Earnings::get_instance();
 
-		// Prepare earnings data (calculates commission split using global settings).
-		$earning_data = $earnings->prepare_order_earnings( $tutor_order_id );
+		error_log( '[TP-PMPRO Earnings] Calculating earnings for Tutor order #' . $tutor_order_id );
 
-		// Store earnings in database.
-		if ( $earning_data ) {
-			$earnings->store_earnings( $earning_data );
+		// Debug: Check if order items exist
+		$items_count = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT COUNT(*) FROM {$wpdb->prefix}tutor_order_items WHERE order_id = %d",
+				$tutor_order_id
+			)
+		);
+		error_log( '[TP-PMPRO Earnings] Order items found in database: ' . $items_count );
+
+		// Prepare earnings data (calculates commission split using global settings).
+		// Note: This is a void method that populates $earnings->earning_data internally.
+		$earnings->prepare_order_earnings( $tutor_order_id );
+
+		// Check if earnings were prepared
+		if ( ! empty( $earnings->earning_data ) ) {
+			error_log( '[TP-PMPRO Earnings] Earning data prepared: ' . count( $earnings->earning_data ) . ' record(s)' );
+			
+			// Store earnings in database.
+			// Note: store_earnings() uses the internal earning_data array, takes no parameters.
+			try {
+				$result = $earnings->store_earnings();
+				error_log( '[TP-PMPRO Earnings] store_earnings SUCCESS - last insert ID: ' . $result );
+			} catch ( \Exception $e ) {
+				error_log( '[TP-PMPRO Earnings] store_earnings FAILED: ' . $e->getMessage() );
+			}
+		} else {
+			error_log( '[TP-PMPRO Earnings] No earning data prepared - $earnings->earning_data is empty' );
 		}
 	}
 
@@ -392,22 +432,29 @@ class PMPro_Earnings_Handler {
 	 *
 	 * @since 1.6.0
 	 *
-	 * @param int    $order_id  Tutor order ID.
-	 * @param string $meta_key  Meta key.
+	 * @param int    $order_id   Tutor order ID.
+	 * @param string $meta_key   Meta key.
 	 * @param mixed  $meta_value Meta value.
+	 * @param int    $user_id    User ID for created_by/updated_by.
 	 * @return void
 	 */
-	private function add_order_meta( $order_id, $meta_key, $meta_value ) {
+	private function add_order_meta( $order_id, $meta_key, $meta_value, $user_id ) {
 		global $wpdb;
+
+		$current_user_id = get_current_user_id();
+		$creator_id = $current_user_id ? $current_user_id : $user_id;
 
 		$wpdb->insert(
 			$wpdb->prefix . 'tutor_ordermeta',
 			array(
-				'order_id'   => $order_id,
-				'meta_key'   => $meta_key,
-				'meta_value' => $meta_value,
+				'order_id'       => $order_id,
+				'meta_key'       => $meta_key,
+				'meta_value'     => $meta_value,
+				'created_at_gmt' => current_time( 'mysql', true ),
+				'created_by'     => $creator_id,
+				'updated_by'     => $creator_id,
 			),
-			array( '%d', '%s', '%s' )
+			array( '%d', '%s', '%s', '%s', '%d', '%d' )
 		);
 	}
 }
