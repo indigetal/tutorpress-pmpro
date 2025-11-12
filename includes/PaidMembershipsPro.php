@@ -855,8 +855,22 @@ class PaidMembershipsPro {
         );
 
         $required_cats = $this->required_levels( $term_ids );
-        if ( is_array( $required_cats ) && ! count( $required_cats ) && ! $this->has_any_full_site_level() ) {
-            // Has access if no full site level and the course has no category.
+        
+        // Check if course has any PMPro level associations (course-specific levels)
+        $has_course_levels = false;
+        if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+            $has_course_levels = (int) $wpdb->get_var( $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
+                $course_id
+            ) ) > 0;
+        }
+        
+        // Only grant automatic access if:
+        // 1. No category restrictions exist
+        // 2. No full-site levels exist
+        // 3. No course-specific levels exist (course is not PMPro-restricted)
+        if ( is_array( $required_cats ) && ! count( $required_cats ) && ! $this->has_any_full_site_level() && ! $has_course_levels ) {
+            // Course has no PMPro restrictions at all - grant access
             return true;
         }
 
@@ -1027,8 +1041,19 @@ class PaidMembershipsPro {
             return $html;
         }
         
-        $is_enrolled       = tutor_utils()->is_enrolled();
-        $has_course_access = tutor_utils()->has_user_course_content_access();
+        $is_enrolled = tutor_utils()->is_enrolled();
+        
+        // Phase 3, Step 3.2: Use our unified access check for consistency
+        // This checks full-site, category-wise, AND course-specific levels
+        $has_course_access = $this->has_course_access( $course_id, get_current_user_id() );
+        
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $access_type = $has_course_access === true ? 'TRUE' : ( is_array( $has_course_access ) ? 'ARRAY' : 'FALSE' );
+            error_log( '[TP-PMPRO] pmpro_pricing course=' . $course_id . ' user=' . get_current_user_id() . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' has_access=' . $access_type );
+        }
+        
+        // Convert to boolean (our method may return array of required levels)
+        $has_course_access = ( $has_course_access === true );
 
         /**
 		 * If current user has course access then no need to show price
@@ -1042,6 +1067,10 @@ class PaidMembershipsPro {
 
         // Determine which levels to show based on membership-only mode
         $membership_only_enabled = self::tutorpress_pmpro_membership_only_enabled();
+        
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[TP-PMPRO] pmpro_pricing continuing to show levels, membership_only=' . ( $membership_only_enabled ? 'yes' : 'no' ) );
+        }
         
         if ( $membership_only_enabled ) {
             // Phase 2: In membership-only mode, show ALL full-site membership levels
