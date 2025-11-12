@@ -834,10 +834,30 @@ class PaidMembershipsPro {
 
         // Prepare data.
         $user_id           = null === $user_id ? get_current_user_id() : $user_id;
+        
+        // Phase 4, Step 4.1: Check WordPress object cache
+        // Cache key format: course_{course_id}_user_{user_id}_access
+        $cache_key = 'course_' . $course_id . '_user_' . $user_id . '_access';
+        $cache_group = 'tutorpress_pmpro';
+        
+        $cached_result = wp_cache_get( $cache_key, $cache_group );
+        if ( false !== $cached_result ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[TP-PMPRO] has_course_access cache HIT course=' . $course_id . ' user=' . $user_id );
+            }
+            return $cached_result;
+        }
+        
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[TP-PMPRO] has_course_access cache MISS course=' . $course_id . ' user=' . $user_id );
+        }
+        
         $has_course_access = false;
 
         // Phase 2: In membership-only mode, logged-out users have NO access
         if ( self::tutorpress_pmpro_membership_only_enabled() && ! $user_id ) {
+            // Cache this result too (short TTL for logged-out users)
+            wp_cache_set( $cache_key, false, $cache_group, 300 );
             return false;
         }
 
@@ -871,6 +891,8 @@ class PaidMembershipsPro {
         // 3. No course-specific levels exist (course is not PMPro-restricted)
         if ( is_array( $required_cats ) && ! count( $required_cats ) && ! $this->has_any_full_site_level() && ! $has_course_levels ) {
             // Course has no PMPro restrictions at all - grant access
+            // Cache this result
+            wp_cache_set( $cache_key, true, $cache_group, 300 );
             return true;
         }
 
@@ -933,7 +955,16 @@ class PaidMembershipsPro {
             }
         }
 
-        return $has_course_access ? true : $this->required_levels( $term_ids, true );
+        // Determine final result
+        $result = $has_course_access ? true : $this->required_levels( $term_ids, true );
+        
+        // Phase 4, Step 4.1: Cache the result
+        // TTL: 300 seconds (5 minutes) - shorter than PMPro's 1 hour since access can change more frequently
+        // In environments without object cache, this only lasts for the current request
+        // In environments with Redis/Memcached, this persists across requests
+        wp_cache_set( $cache_key, $result, $cache_group, 300 );
+        
+        return $result;
     }
 
     /**
