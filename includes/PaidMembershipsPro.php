@@ -817,13 +817,34 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * Just check if has membership access
-	 *
-	 * @param int $course_id course id.
-	 * @param int $user_id user id.
-	 *
-	 * @return boolean|mixed
-	 */
+     * Check if user has membership access to a course.
+     *
+     * This method checks three types of PMPro membership access:
+     * 1. Full-site membership: Level with TUTORPRESS_PMPRO_membership_model = 'full_website_membership'
+     *    - Grants access to ALL courses on the site
+     * 2. Category-wise membership: Level with TUTORPRESS_PMPRO_membership_model = 'category_wise_membership'
+     *    - Grants access to courses in specific categories assigned to the level
+     * 3. Course-specific level: Level directly associated with course via pmpro_memberships_pages
+     *    - No membership_model meta set
+     *    - Grants access to individual courses
+     *
+     * Additional Behavior:
+     * - Filters out expired memberships (checks enddate timestamp)
+     * - Respects membership-only mode (logged-out users denied when enabled)
+     * - Returns gracefully when PMPro not available (grants access)
+     * - Returns array of required level IDs if user lacks access to restricted course
+     * - Includes WordPress cache support (5-minute TTL)
+     * - Provides 'tutorpress_pmpro_has_course_access' filter hook for extensibility
+     *
+     * @since 1.0.0
+     *
+     * @param int      $course_id Course post ID.
+     * @param int|null $user_id   User ID (defaults to current user, 0 for logged-out users).
+     *
+     * @return bool|array True if user has access, 
+     *                    false if course has no restrictions, 
+     *                    array of required level IDs if user lacks access to restricted course.
+     */
     private function has_course_access( $course_id, $user_id = null ) {
         global $wpdb;
 
@@ -958,7 +979,43 @@ class PaidMembershipsPro {
         // Determine final result
         $result = $has_course_access ? true : $this->required_levels( $term_ids, true );
         
-        // Phase 4, Step 4.1: Cache the result
+        /**
+         * Filter the course access result.
+         * 
+         * Allows third-party plugins or custom code to override access decisions.
+         * This filter runs after all core access checks (full-site, category-wise, 
+         * and course-specific levels) but before the result is cached.
+         * 
+         * @since 1.0.0
+         * 
+         * @param bool|array $result      Access result: 
+         *                                - true: User has access to the course
+         *                                - false: User has no access
+         *                                - array: Array of required level IDs (no access)
+         * @param int        $course_id   Course post ID being checked.
+         * @param int        $user_id     User ID being checked (0 for logged-out users).
+         * 
+         * @example
+         * // Grant promotional access to a specific course
+         * add_filter( 'tutorpress_pmpro_has_course_access', function( $has_access, $course_id, $user_id ) {
+         *     if ( $course_id === 123 && time() < strtotime('2025-12-31') ) {
+         *         return true; // Grant access during promotion
+         *     }
+         *     return $has_access;
+         * }, 10, 3 );
+         * 
+         * @example
+         * // Block access for users with overdue payments
+         * add_filter( 'tutorpress_pmpro_has_course_access', function( $has_access, $course_id, $user_id ) {
+         *     if ( user_has_overdue_invoices( $user_id ) ) {
+         *         return false; // Block access regardless of membership
+         *     }
+         *     return $has_access;
+         * }, 10, 3 );
+         */
+        $result = apply_filters( 'tutorpress_pmpro_has_course_access', $result, $course_id, $user_id );
+        
+        // Phase 4, Step 4.1: Cache the result (after filtering)
         // TTL: 300 seconds (5 minutes) - shorter than PMPro's 1 hour since access can change more frequently
         // In environments without object cache, this only lasts for the current request
         // In environments with Redis/Memcached, this persists across requests
