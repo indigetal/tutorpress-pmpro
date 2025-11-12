@@ -36,6 +36,13 @@ class PMPro_Earnings_Handler {
 	private static $instance = null;
 
 	/**
+	 * Current order ID being processed for earnings (for debug logging).
+	 *
+	 * @var int|null
+	 */
+	private $current_earnings_order_id = null;
+
+	/**
 	 * Get singleton instance
 	 *
 	 * @return PMPro_Earnings_Handler
@@ -56,11 +63,20 @@ class PMPro_Earnings_Handler {
 		// Initial checkout (one-time or first subscription payment).
 		add_action( 'pmpro_after_checkout', array( $this, 'handle_checkout_complete' ), 10, 2 );
 
-		// Subscription renewal payments.
+		// Subscription renewal payments (fired by gateway webhooks/IPNs when renewals are processed).
 		add_action( 'pmpro_subscription_payment_completed', array( $this, 'handle_subscription_renewal' ), 10, 1 );
 
 		// Cancellations/Refunds.
 		add_action( 'pmpro_updated_order', array( $this, 'handle_order_status_change' ), 10, 2 );
+
+		// Ensure Tutor Core can find course_id for PMPro subscription orders during earnings calculation.
+		// For subscription orders, Tutor Core uses these filters to determine the course_id.
+		add_filter( 'tutor_subscription_course_by_plan', array( $this, 'filter_subscription_course_by_plan' ), 10, 2 );
+		add_filter( 'tutor_get_plan_info', array( $this, 'filter_get_plan_info' ), 10, 2 );
+
+		// Fix: Intercept earnings calculation to correct zero amounts for PMPro subscriptions.
+		add_filter( 'tutor_pro_earning_calculator', array( $this, 'fix_subscription_earnings_calculation' ), 999, 1 );
+
 	}
 
 	/**
@@ -81,6 +97,22 @@ class PMPro_Earnings_Handler {
 			return;
 		}
 
+		// Check if this PMPro order already has a Tutor order (avoid duplicates).
+		global $wpdb;
+		$existing_tutor_order = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT order_id FROM {$wpdb->prefix}tutor_ordermeta
+				 WHERE meta_key = 'pmpro_order_id' AND meta_value = %d
+				 LIMIT 1",
+				$morder->id
+			)
+		);
+
+		if ( $existing_tutor_order ) {
+			error_log( '[TP-PMPRO Earnings] PMPro order #' . $morder->id . ' already has Tutor order #' . $existing_tutor_order . ', skipping' );
+			return;
+		}
+
 		// Get the membership level.
 		$level = pmpro_getLevel( $morder->membership_id );
 		if ( ! $level ) {
@@ -94,12 +126,12 @@ class PMPro_Earnings_Handler {
 			return;
 		}
 
-		// Determine order type.
+		// Determine order type (initial checkout only - renewals come through pmpro_subscription_payment_completed).
 		$is_subscription = ! empty( $level->cycle_number ) || ! empty( $level->billing_amount );
 		$order_type      = $is_subscription ? OrderModel::TYPE_SUBSCRIPTION : OrderModel::TYPE_SINGLE_ORDER;
 
 		// Get the amount paid (use initial_payment for subscriptions, otherwise use total).
-		$amount = ! empty( $morder->total ) ? $morder->total : $level->initial_payment;
+		$amount = ! empty( $morder->total ) ? $morder->total : ( $is_subscription ? $level->initial_payment : 0 );
 
 		// Create minimal Tutor order record.
 		$tutor_order_id = $this->create_tutor_order(
@@ -144,23 +176,32 @@ class PMPro_Earnings_Handler {
 	 * @return void
 	 */
 	public function handle_subscription_renewal( $morder ) {
+		error_log( '[TP-PMPRO Earnings] handle_subscription_renewal called for PMPro order #' . ( isset( $morder->id ) ? $morder->id : 'unknown' ) );
+		
 		// Skip if revenue sharing is disabled.
 		if ( ! $this->is_revenue_sharing_enabled() ) {
+			error_log( '[TP-PMPRO Earnings] Revenue sharing disabled, skipping renewal' );
 			return;
 		}
 
 		// Get the membership level.
 		$level = pmpro_getLevel( $morder->membership_id );
 		if ( ! $level ) {
+			error_log( '[TP-PMPRO Earnings] Could not get level for membership_id: ' . ( isset( $morder->membership_id ) ? $morder->membership_id : 'unknown' ) );
 			return;
 		}
+
+		error_log( '[TP-PMPRO Earnings] Processing renewal for level #' . $level->id . ', user #' . ( isset( $morder->user_id ) ? $morder->user_id : 'unknown' ) );
 
 		// Check if this is a TutorPress-managed course-specific level.
 		$course_id = get_pmpro_membership_level_meta( $level->id, 'tutorpress_course_id', true );
 		if ( ! $course_id ) {
 			// Not a course-specific level - skip earnings.
+			error_log( '[TP-PMPRO Earnings] Level #' . $level->id . ' is not a course-specific level, skipping renewal earnings' );
 			return;
 		}
+
+		error_log( '[TP-PMPRO Earnings] Renewal is for course #' . $course_id );
 
 		// Get renewal amount (typically billing_amount, but use total from order if available).
 		$amount = ! empty( $morder->total ) ? $morder->total : $level->billing_amount;
@@ -384,6 +425,9 @@ class PMPro_Earnings_Handler {
 		
 		$earnings = Earnings::get_instance();
 
+		// Store order_id for debug logging in filter.
+		$this->current_earnings_order_id = $tutor_order_id;
+
 		error_log( '[TP-PMPRO Earnings] Calculating earnings for Tutor order #' . $tutor_order_id );
 
 		// Debug: Check if order items exist
@@ -395,6 +439,34 @@ class PMPro_Earnings_Handler {
 		);
 		error_log( '[TP-PMPRO Earnings] Order items found in database: ' . $items_count );
 
+		// Debug: Check order item data before earnings calculation
+		$order_item = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT id, order_id, item_id, regular_price, sale_price FROM {$wpdb->prefix}tutor_order_items WHERE order_id = %d LIMIT 1",
+				$tutor_order_id
+			)
+		);
+		if ( $order_item ) {
+			error_log( sprintf(
+				'[TP-PMPRO Earnings] Order item data: id=%d, item_id=%d, regular_price=%s, sale_price=%s',
+				$order_item->id,
+				$order_item->item_id,
+				$order_item->regular_price,
+				$order_item->sale_price
+			) );
+		}
+
+		// Debug: Check revenue sharing settings
+		$revenue_sharing_enabled = tutor_utils()->get_option( 'enable_revenue_sharing' );
+		$instructor_commission = tutor_utils()->get_option( 'earning_instructor_commission' );
+		$admin_commission = tutor_utils()->get_option( 'earning_admin_commission' );
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] Revenue sharing: enabled=%s, instructor_rate=%s%%, admin_rate=%s%%',
+			$revenue_sharing_enabled ? 'yes' : 'no',
+			$instructor_commission,
+			$admin_commission
+		) );
+
 		// Prepare earnings data (calculates commission split using global settings).
 		// Note: This is a void method that populates $earnings->earning_data internally.
 		$earnings->prepare_order_earnings( $tutor_order_id );
@@ -402,6 +474,19 @@ class PMPro_Earnings_Handler {
 		// Check if earnings were prepared
 		if ( ! empty( $earnings->earning_data ) ) {
 			error_log( '[TP-PMPRO Earnings] Earning data prepared: ' . count( $earnings->earning_data ) . ' record(s)' );
+			
+			// Debug: Log the earning data before storing
+			foreach ( $earnings->earning_data as $index => $earning_record ) {
+				error_log( sprintf(
+					'[TP-PMPRO Earnings] Earning record #%d: course_id=%s, user_id=%s, instructor_amount=%s, admin_amount=%s, course_price_total=%s',
+					$index,
+					isset( $earning_record['course_id'] ) ? $earning_record['course_id'] : 'N/A',
+					isset( $earning_record['user_id'] ) ? $earning_record['user_id'] : 'N/A',
+					isset( $earning_record['instructor_amount'] ) ? $earning_record['instructor_amount'] : 'N/A',
+					isset( $earning_record['admin_amount'] ) ? $earning_record['admin_amount'] : 'N/A',
+					isset( $earning_record['course_price_total'] ) ? $earning_record['course_price_total'] : 'N/A'
+				) );
+			}
 			
 			// Store earnings in database.
 			// Note: store_earnings() uses the internal earning_data array, takes no parameters.
@@ -414,6 +499,9 @@ class PMPro_Earnings_Handler {
 		} else {
 			error_log( '[TP-PMPRO Earnings] No earning data prepared - $earnings->earning_data is empty' );
 		}
+
+		// Clear debug flag.
+		$this->current_earnings_order_id = null;
 	}
 
 	/**
@@ -425,6 +513,150 @@ class PMPro_Earnings_Handler {
 	 */
 	private function is_revenue_sharing_enabled() {
 		return (bool) tutor_utils()->get_option( 'enable_revenue_sharing' );
+	}
+
+	/**
+	 * Fix: Correct zero earnings amounts for PMPro subscription orders
+	 *
+	 * Tutor Core's get_item_sold_price() sometimes returns 0 for PMPro subscription orders,
+	 * causing earnings to be zeroed out. This filter intercepts the earnings calculation
+	 * and recalculates amounts using the actual order total when needed.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param array $pro_arg Array with earning calculation data.
+	 * @return array Modified array with corrected amounts.
+	 */
+	public function fix_subscription_earnings_calculation( $pro_arg ) {
+		// Only process during earnings calculation for PMPro orders.
+		if ( empty( $this->current_earnings_order_id ) ) {
+			return $pro_arg;
+		}
+
+		// If course_price_grand_total is 0 but we know the order has a valid amount,
+		// recalculate instructor_amount and admin_amount using the correct price.
+		if ( isset( $pro_arg['course_price_grand_total'] ) && $pro_arg['course_price_grand_total'] == 0 ) {
+			// Get the actual order amount from our order.
+			global $wpdb;
+			$order = $wpdb->get_row(
+				$wpdb->prepare(
+					"SELECT total_price FROM {$wpdb->prefix}tutor_orders WHERE id = %d",
+					$this->current_earnings_order_id
+				)
+			);
+			
+			if ( $order && $order->total_price > 0 ) {
+				$correct_price = floatval( $order->total_price );
+				
+				// Recalculate amounts using correct price.
+				$pro_arg['course_price_grand_total'] = $correct_price;
+				
+				// Recalculate instructor and admin amounts if they're also 0.
+				if ( $pro_arg['instructor_amount'] == 0 && $pro_arg['admin_amount'] == 0 ) {
+					$instructor_rate = isset( $pro_arg['instructor_rate'] ) ? floatval( $pro_arg['instructor_rate'] ) : 0;
+					$admin_rate = isset( $pro_arg['admin_rate'] ) ? floatval( $pro_arg['admin_rate'] ) : 100;
+					
+					$pro_arg['instructor_amount'] = $instructor_rate > 0 ? ( ( $correct_price * $instructor_rate ) / 100 ) : 0;
+					$pro_arg['admin_amount'] = $admin_rate > 0 ? ( ( $correct_price * $admin_rate ) / 100 ) : 0;
+				}
+			}
+		}
+		
+		return $pro_arg;
+	}
+
+	/**
+	 * Filter: Ensure Tutor Core can find course_id for PMPro subscription orders
+	 *
+	 * Tutor Core uses this filter to get the course_id from subscription plan/item_id.
+	 * For PMPro orders, the item_id in order_items is the course_id.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int|null $course_id Course ID (null if not found).
+	 * @param object   $order     Tutor order object.
+	 * @return int|null Course ID.
+	 */
+	public function filter_subscription_course_by_plan( $course_id, $order ) {
+		// Debug logging.
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] filter_subscription_course_by_plan called: course_id=%s, order_id=%s, payment_method=%s',
+			$course_id ? $course_id : 'null',
+			isset( $order->id ) ? $order->id : 'N/A',
+			isset( $order->payment_method ) ? $order->payment_method : 'N/A'
+		) );
+
+		// If course_id already found, return it.
+		if ( ! empty( $course_id ) ) {
+			error_log( '[TP-PMPRO Earnings] filter_subscription_course_by_plan: course_id already set, returning ' . $course_id );
+			return $course_id;
+		}
+
+		// Check if this is a PMPro order.
+		if ( empty( $order->payment_method ) || $order->payment_method !== 'pmpro' ) {
+			error_log( '[TP-PMPRO Earnings] filter_subscription_course_by_plan: Not a PMPro order, returning course_id' );
+			return $course_id;
+		}
+
+		// For PMPro orders, get course_id from order items.
+		// The item_id in tutor_order_items is the course_id.
+		global $wpdb;
+		$order_item = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT item_id FROM {$wpdb->prefix}tutor_order_items WHERE order_id = %d LIMIT 1",
+				$order->id
+			)
+		);
+
+		if ( ! empty( $order_item->item_id ) ) {
+			// Verify this is a valid course.
+			$post_type = get_post_type( $order_item->item_id );
+			if ( $post_type === tutor()->course_post_type ) {
+				error_log( '[TP-PMPRO Earnings] filter_subscription_course_by_plan: Found course_id ' . $order_item->item_id . ' for PMPro order #' . $order->id );
+				return (int) $order_item->item_id;
+			}
+		}
+
+		return $course_id;
+	}
+
+	/**
+	 * Filter: Prevent Tutor Core from treating PMPro subscriptions as membership plans
+	 *
+	 * Tutor Core checks if a subscription is a "membership plan" and sets course_id to null if so.
+	 * We need to ensure PMPro subscriptions are NOT treated as membership plans.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param object|null $plan_info Plan info object (null if not found).
+	 * @param int         $item_id   Item ID (course_id for PMPro orders).
+	 * @return object|null Plan info object.
+	 */
+	public function filter_get_plan_info( $plan_info, $item_id ) {
+		// If plan_info already set, return it (let other plugins handle it).
+		if ( ! empty( $plan_info ) ) {
+			return $plan_info;
+		}
+
+		// Check if this is a PMPro course by checking if there's a PMPro level with this course_id.
+		global $wpdb;
+		$pmpro_level = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT pmpro_membership_level_id FROM {$wpdb->prefix}pmpro_membership_levelmeta
+				 WHERE meta_key = 'tutorpress_course_id' AND meta_value = %d
+				 LIMIT 1",
+				$item_id
+			)
+		);
+
+		// If this is a PMPro course, return null to indicate it's NOT a Tutor membership plan.
+		// This ensures Tutor Core treats it as a course subscription, not a membership plan.
+		if ( ! empty( $pmpro_level ) ) {
+			error_log( '[TP-PMPRO Earnings] filter_get_plan_info: PMPro course ' . $item_id . ' is NOT a Tutor membership plan' );
+			return null;
+		}
+
+		return $plan_info;
 	}
 
 	/**
