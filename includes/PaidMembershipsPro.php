@@ -42,6 +42,22 @@ class PaidMembershipsPro {
     private $access_checker;
 
     /**
+     * Pricing display service instance.
+     *
+     * @since 1.0.0
+     * @var \TUTORPRESS_PMPRO\Frontend\Pricing_Display
+     */
+    private $pricing_display;
+
+    /**
+     * Enrollment UI service instance.
+     *
+     * @since 1.0.0
+     * @var \TUTORPRESS_PMPRO\Frontend\Enrollment_UI
+     */
+    private $enrollment_ui;
+
+    /**
 	 * Register hooks
 	 */
     public function __construct() {
@@ -49,6 +65,13 @@ class PaidMembershipsPro {
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/access/interface-access-checker.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/access/class-access-checker.php';
         $this->access_checker = new \TUTORPRESS_PMPRO\Access\Access_Checker();
+        
+        // Phase 8, Step 8.1: Load frontend services
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pricing-display.php';
+        $this->pricing_display = new \TUTORPRESS_PMPRO\Frontend\Pricing_Display( $this->access_checker, $this );
+        
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrollment-ui.php';
+        $this->enrollment_ui = new \TUTORPRESS_PMPRO\Frontend\Enrollment_UI( $this->access_checker, $this->pricing_display );
         
         // Register frontend pricing hooks late in page lifecycle
         add_action( 'wp', array( $this, 'init_pmpro_price_overrides' ), 20 );
@@ -58,10 +81,15 @@ class PaidMembershipsPro {
         add_filter( 'tutor_course_price', array( $this, 'tutor_course_price' ) );
         add_filter( 'tutor-loop-default-price', array( $this, 'add_membership_required' ) );
 
-        add_filter( 'tutor/course/single/entry-box/free', array( $this, 'pmpro_pricing' ), 10, 2 );
-        add_filter( 'tutor/course/single/entry-box/is_enrolled', array( $this, 'pmpro_pricing' ), 10, 2 );
-        add_filter( 'tutor/course/single/entry-box/purchasable', array( $this, 'show_pmpro_membership_plans' ), 12, 2 );
-        add_action( 'tutor/course/single/content/before/all', array( $this, 'pmpro_pricing_single_course' ), 100, 2 );
+        // Phase 8, Step 8.1: Moved to Frontend services
+        // Pricing_Display:
+        //   - tutor/course/single/entry-box/free → pmpro_pricing
+        //   - tutor/course/single/entry-box/is_enrolled → pmpro_pricing
+        //   - tutor/course/single/content/before/all → pmpro_pricing_single_course
+        // Enrollment_UI:
+        //   - tutor/course/single/entry-box/purchasable → show_pmpro_membership_plans
+        //   - tutor_allow_guest_attempt_enrollment → filter_allow_guest_attempt_enrollment
+        //   - tutor_after_enrolled → handle_after_enrollment_completed
         add_filter( 'tutor/options/attr', array( $this, 'add_options' ) );
 
 		if ( tutor_utils()->has_pmpro( true ) ) {
@@ -92,9 +120,9 @@ class PaidMembershipsPro {
 			// Membership-Only Mode filter and helpers
 			$this->wire_membership_only_mode_filter();
 
-			// Frontend behavior overrides
-			add_filter( 'tutor_allow_guest_attempt_enrollment', array( $this, 'filter_allow_guest_attempt_enrollment' ), 11, 3 );
-			add_action( 'tutor_after_enrolled', array( $this, 'handle_after_enrollment_completed' ), 10, 3 );
+			// Phase 8, Step 8.1: Enrollment hooks moved to Enrollment_UI service
+			// - tutor_allow_guest_attempt_enrollment → filter_allow_guest_attempt_enrollment
+			// - tutor_after_enrolled → handle_after_enrollment_completed
 
 			// Step 3.4c: PMPro Critical Filter Hooks for Dynamic Pricing (Zero-Delay Architecture)
 			add_filter( 'pmpro_checkout_level', array( $this, 'filter_checkout_level_sale_price' ), 10, 1 ); // Changed priority to 10
@@ -131,155 +159,16 @@ class PaidMembershipsPro {
             return;
         }
 
-        // Price string injection for archive/dashboard/single contexts
-        add_filter( 'get_tutor_course_price', array( $this, 'filter_get_tutor_course_price' ), 12, 2 );
-
-        // Directly override loop price block for archive/dashboard contexts (revised Step B)
-        add_filter( 'tutor_course_loop_price', array( $this, 'filter_course_loop_price_pmpro' ), 12, 2 );
-
-        // Ensure loop uses Tutor monetization wrappers so our string renders inside native markup
-        add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
+        // Phase 8, Step 8.1: Register frontend services hooks
+        $this->pricing_display->register_hooks();
+        $this->enrollment_ui->register_hooks();
 
     }
 
     /**
-     * Return PMPro minimal price string when available.
-     * Falls back to original price if engine/levels are not applicable.
-     * 
-     * Handles sale prices with strikethrough formatting for dashboard display.
-     *
-     * @param mixed $price
-     * @param int   $course_id
-     * @return mixed
+     * [REMOVED - Phase 8, Step 8.1: Substep 2]
+     * filter_get_tutor_course_price() → Moved to Pricing_Display::filter_get_tutor_course_price()
      */
-    public function filter_get_tutor_course_price( $price, $course_id = 0 ) {
-        $course_id = $course_id ? (int) $course_id : (int) get_the_ID();
-        if ( ! $course_id ) {
-            return $price;
-        }
-        if ( ! $this->is_pmpro_enabled() ) {
-            return $price;
-        }
-
-        // Respect free courses
-        if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
-            return $price;
-        }
-
-        // Get course-specific levels (check multiple sources)
-        global $wpdb;
-        $level_ids = array();
-        
-        // Primary: pmpro_memberships_pages table
-        if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-            $level_ids = $wpdb->get_col(
-                $wpdb->prepare(
-                    "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
-                    $course_id
-                )
-            );
-        }
-        
-        // Secondary: course meta
-        $meta_ids = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
-        if ( is_array( $meta_ids ) && ! empty( $meta_ids ) ) {
-            $level_ids = array_merge( $level_ids, $meta_ids );
-        }
-        
-        // Tertiary: reverse meta lookup (tutorpress_course_id)
-        if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
-            $reverse_ids = $wpdb->get_col(
-                $wpdb->prepare(
-                    "SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
-                    'tutorpress_course_id',
-                    (string) $course_id
-                )
-            );
-            $level_ids = array_merge( $level_ids, $reverse_ids );
-        }
-        
-        // Remove duplicates and ensure integers
-        $level_ids = array_map( 'intval', array_unique( $level_ids ) );
-        $level_ids = array_filter( $level_ids ); // Remove zeros
-
-        if ( empty( $level_ids ) ) {
-            return $price;
-        }
-
-        // Get currency formatting
-        $cur = $this->get_pmpro_currency();
-        $symbol = isset( $cur['currency_symbol'] ) ? $cur['currency_symbol'] : '';
-        $pos    = isset( $cur['currency_position'] ) ? $cur['currency_position'] : 'left';
-
-        $format_price = function( $amt ) use ( $symbol, $pos ) {
-            $amt = number_format_i18n( (float) $amt, 2 );
-            if ( $symbol ) {
-                if ( 'left_space' === $pos ) return $symbol . ' ' . $amt;
-                if ( 'right' === $pos )      return $amt . $symbol;
-                if ( 'right_space' === $pos )return $amt . ' ' . $symbol;
-            }
-            return $symbol . $amt;
-        };
-
-        // Build price string with sale support
-        $price_strings = array();
-        foreach ( $level_ids as $level_id ) {
-            $level = pmpro_getLevel( (int) $level_id );
-            if ( ! $level ) {
-                continue;
-            }
-
-            // Use dynamic pricing helper (handles sale schedule)
-            $active_price_data = $this->get_active_price_for_level( (int) $level_id );
-            $active_price = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : (float) $level->initial_payment;
-            $is_on_sale = ! empty( $active_price_data['on_sale'] );
-            $regular_price = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $active_price;
-
-            // Format price string
-            if ( $is_on_sale ) {
-                // Sale price with strikethrough regular price
-                $price_strings[] = '<span class="tutor-course-price"><del>' . esc_html( $format_price( $regular_price ) ) . '</del> <strong>' . esc_html( $format_price( $active_price ) ) . '</strong></span>';
-            } else {
-                // Regular price
-                $price_strings[] = '<span class="tutor-course-price">' . esc_html( $format_price( $active_price ) ) . '</span>';
-            }
-
-            // Add subscription info if applicable
-            if ( ! empty( $level->billing_amount ) && ! empty( $level->cycle_number ) ) {
-                $cycle_period = strtolower( $level->cycle_period );
-                $period_label = '';
-                if ( 'day' === $cycle_period ) {
-                    $period_label = __( 'day', 'tutorpress-pmpro' );
-                } elseif ( 'week' === $cycle_period ) {
-                    $period_label = __( 'week', 'tutorpress-pmpro' );
-                } elseif ( 'month' === $cycle_period ) {
-                    $period_label = __( 'month', 'tutorpress-pmpro' );
-                } elseif ( 'year' === $cycle_period ) {
-                    $period_label = __( 'year', 'tutorpress-pmpro' );
-                } else {
-                    $period_label = $cycle_period;
-                }
-
-                $billing_amount = (float) $level->billing_amount;
-                $last_price = array_pop( $price_strings );
-                $price_strings[] = $last_price . ' <span class="tutor-course-price-period">' . esc_html( sprintf( __( 'then %s per %s', 'tutorpress-pmpro' ), $format_price( $billing_amount ), $period_label ) ) . '</span>';
-            } else {
-                // One-time purchase
-                $last_price = array_pop( $price_strings );
-                $price_strings[] = $last_price . ' <span class="tutor-course-price-period">' . esc_html__( 'one-time', 'tutorpress-pmpro' ) . '</span>';
-            }
-        }
-
-        if ( ! empty( $price_strings ) ) {
-            // Return first price (or "Starting at" if multiple)
-            if ( count( $price_strings ) > 1 ) {
-                return '<span class="tutor-course-price-label">' . esc_html__( 'Starting at', 'tutorpress-pmpro' ) . ' </span>' . $price_strings[0];
-            }
-            return $price_strings[0];
-        }
-
-        return $price;
-    }
 
     /**
      * Ensure Tutor uses the 'tutor' price template wrappers in loops
@@ -288,248 +177,16 @@ class PaidMembershipsPro {
      * @param string|null $sell_by
      * @return string|null
      */
-    public function filter_course_sell_by( $sell_by ) {
-        if ( ! $this->is_pmpro_enabled() ) {
-            return $sell_by;
-        }
-        // For PMPro engine, use Tutor monetization wrappers in loops so
-        // get_tutor_course_price can render the PMPro price string.
-        // This keeps markup consistent regardless of mapping state.
-        return 'tutor';
-    }
-
     /**
-     * Replace the loop price block with PMPro minimal pricing when applicable.
+     * [REMOVED - Phase 8, Step 8.1: Substep 1]
      * 
-     * When membership-only mode is enabled, show "View Pricing"
-     * button instead of normal price for users without access.
+     * The following methods have been extracted to Pricing_Display service:
+     * - filter_course_sell_by() → Pricing_Display::filter_course_sell_by()
+     * - filter_course_loop_price_pmpro() → Pricing_Display::filter_course_loop_price_pmpro()
+     * - render_membership_price_button() → Pricing_Display::render_membership_price_button()
      *
-     * @param string $html
-     * @param int    $course_id
-     * @return string
+     * All functionality preserved via delegation to Pricing_Display service.
      */
-    public function filter_course_loop_price_pmpro( $html, $course_id ) {
-        if ( ! $this->is_pmpro_enabled() ) {
-            return $html;
-        }
-
-        $course_id = (int) $course_id ?: (int) get_the_ID();
-        if ( ! $course_id ) {
-            return $html;
-        }
-
-        // Phase 2, Step 6: Membership-only mode loop price override
-        if ( self::tutorpress_pmpro_membership_only_enabled() ) {
-            // Respect public courses
-            if ( \TUTOR\Course_List::is_public( $course_id ) ) {
-                return $html;
-            }
-
-            // Respect free courses
-            if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
-                return $html;
-            }
-
-            // Keep enrollment display if user purchased this course individually (not via membership)
-            if ( tutor_utils()->is_enrolled( $course_id ) && ! $this->is_enrolled_by_pmpro_membership( $course_id ) ) {
-                return $html;
-            }
-
-            // For all other cases in membership-only mode, show "View Pricing" button
-            // This includes: logged-out users, users without membership, users without access
-            // has_course_access() returns:
-            // - true if user has access
-            // - false if no membership required (shouldn't happen in membership-only mode)
-            // - array of required levels if user doesn't have access
-            $user_has_access = $this->has_course_access( $course_id );
-            
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[TP-PMPRO] filter_course_loop_price_pmpro course=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
-            }
-            
-            // Only show original HTML if user truly has access (returns exactly true)
-            if ( $user_has_access === true ) {
-                return $html;
-            }
-            
-            // For all other cases (false, array, etc.), show "View Pricing" button
-            return $this->render_membership_price_button( $course_id );
-        }
-
-        // Below this point: Hybrid mode (membership-only is OFF)
-        // Respect public/free courses
-        if ( get_post_meta( $course_id, '_tutor_is_public_course', true ) === 'yes' ) {
-            return $html;
-        }
-        if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
-            return $html;
-        }
-
-        // Check if this course has "membership" selling option - show "View Pricing" button
-        $selling_option = \TUTOR\Course::get_selling_option( $course_id );
-        if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
-            return $this->render_membership_price_button( $course_id );
-        }
-
-        // Must have PMPro level associations
-        global $wpdb;
-        $has_levels = false;
-        if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-            $has_levels = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) ) > 0;
-        }
-        if ( ! $has_levels ) {
-            return $html;
-        }
-
-        // Phase 1, Step 1.1 Extension: Check if user has access via any membership type
-        // If user has access, return original HTML (don't show pricing)
-        $user_has_access = $this->has_course_access( $course_id );
-        
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[TP-PMPRO] filter_course_loop_price_pmpro (hybrid mode) course=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
-        }
-        
-        if ( $user_has_access === true ) {
-            return $html;
-        }
-
-        // Resolve minimal price string
-        $price = class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Pricing' ) ? \TUTORPRESS_PMPRO\PMPro_Pricing::get_formatted_price( $course_id ) : '';
-
-        // Fallback: derive price from mapped level data if resolver returned empty
-        if ( ! is_string( $price ) || $price === '' ) {
-            $amount_strings = array();
-            $numeric_amounts = array();
-            // Currency helpers
-            $cur = $this->get_pmpro_currency();
-            $symbol = isset( $cur['currency_symbol'] ) ? $cur['currency_symbol'] : '';
-            $pos    = isset( $cur['currency_position'] ) ? $cur['currency_position'] : 'left';
-            $fmt = function( $amt ) use ( $symbol, $pos ) {
-                $amt = number_format_i18n( (float) $amt, 2 );
-                if ( $symbol ) {
-                    if ( 'left_space' === $pos ) return $symbol . ' ' . $amt;
-                    if ( 'right' === $pos )      return $amt . $symbol;
-                    if ( 'right_space' === $pos )return $amt . ' ' . $symbol;
-                }
-                return $symbol . $amt;
-            };
-            $per_label = function( $p ) {
-                $p = strtolower( (string) $p );
-                if ( $p === 'day' ) return __( 'day', 'tutorpress-pmpro' );
-                if ( $p === 'week' ) return __( 'week', 'tutorpress-pmpro' );
-                if ( $p === 'month' ) return __( 'month', 'tutorpress-pmpro' );
-                if ( $p === 'year' ) return __( 'year', 'tutorpress-pmpro' );
-                return $p;
-            };
-
-            $level_ids = isset( $wpdb->pmpro_memberships_pages ) ? $wpdb->get_col( $wpdb->prepare( "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) ) : array();
-            if ( is_array( $level_ids ) ) {
-                foreach ( $level_ids as $lid ) {
-                    $level = function_exists( 'pmpro_getLevel' ) ? pmpro_getLevel( (int) $lid ) : null;
-                    if ( ! $level ) continue;
-                    
-                    // Step 3.4b: Use dynamic pricing for archive display with sale support
-                    $active_price_data = $this->get_active_price_for_level( (int) $lid );
-                    $init  = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : ( isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0 );
-                    $is_on_sale = ! empty( $active_price_data['on_sale'] );
-                    $regular_price = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $init;
-                    
-                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[TP-PMPRO] Level ID=' . $lid . ' init=' . $init . ' is_on_sale=' . ( $is_on_sale ? 'yes' : 'no' ) . ' regular=' . $regular_price );
-                    }
-                    
-                    $bill  = isset( $level->billing_amount ) ? (float) $level->billing_amount : 0.0;
-                    $cycle = isset( $level->cycle_number ) ? (int) $level->cycle_number : 0;
-                    $per   = isset( $level->cycle_period ) ? strtolower( (string) $level->cycle_period ) : '';
-
-                    if ( $bill > 0 && $cycle > 0 && $per ) {
-                        // RECURRING SUBSCRIPTION
-                        // Show initial payment with sale indication, plus recurring in parentheses
-                        $price_str = '';
-                        
-                        if ( $is_on_sale && $regular_price > $init ) {
-                            // With sale: "~~$100~~ $75 (then $50/Mo)"
-                            $price_str = sprintf(
-                                '<del style="opacity: 0.6;">%s</del> %s <span style="opacity: 0.7;">(%s %s/%s)</span>',
-                                $fmt( $regular_price ),
-                                $fmt( $init ),
-                                __( 'then', 'tutorpress-pmpro' ),
-                                $fmt( $bill ),
-                                $per_label( $per )
-                            );
-                        } elseif ( $init != $bill ) {
-                            // No sale, but initial differs from recurring: "$100 (then $50/Mo)"
-                            $price_str = sprintf(
-                                '%s <span style="opacity: 0.7;">(%s %s/%s)</span>',
-                                $fmt( $init ),
-                                __( 'then', 'tutorpress-pmpro' ),
-                                $fmt( $bill ),
-                                $per_label( $per )
-                            );
-                        } else {
-                            // Initial = recurring: Just "$50/Mo"
-                            $price_str = sprintf( '%s %s/%s', $fmt( $bill ), __( 'per', 'tutorpress-pmpro' ), $per_label( $per ) );
-                        }
-                        
-                        $amount_strings[] = $price_str;
-                        $numeric_amounts[] = $init; // Use initial for price comparison
-                    } elseif ( $init > 0 ) {
-                        // ONE-TIME PURCHASE
-                        if ( $is_on_sale && $regular_price > $init ) {
-                            // With sale: "~~$100~~ $75 one-time"
-                            $amount_strings[] = sprintf(
-                                '<del style="opacity: 0.6;">%s</del> %s %s',
-                                $fmt( $regular_price ),
-                                $fmt( $init ),
-                                __( 'one-time', 'tutorpress-pmpro' )
-                            );
-                        } else {
-                            // No sale: "$100 one-time"
-                            $amount_strings[] = sprintf( '%s %s', $fmt( $init ), __( 'one-time', 'tutorpress-pmpro' ) );
-                        }
-                        $numeric_amounts[] = $init;
-                    }
-                }
-            }
-            if ( ! empty( $amount_strings ) ) {
-                if ( count( $amount_strings ) === 1 ) {
-                    $price = $amount_strings[0];
-                } else {
-                    // Multiple pricing options - find the minimum and show it with "Starting at"
-                    $min = min( $numeric_amounts );
-                    $min_index = array_search( $min, $numeric_amounts );
-                    
-                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[TP-PMPRO] Multiple plans - course_id=' . $course_id );
-                        error_log( '[TP-PMPRO] numeric_amounts: ' . print_r( $numeric_amounts, true ) );
-                        error_log( '[TP-PMPRO] amount_strings: ' . print_r( $amount_strings, true ) );
-                        error_log( '[TP-PMPRO] min=' . $min . ', min_index=' . $min_index );
-                    }
-                    
-                    // Use the full price string (with sale if applicable) for the minimum price
-                    $min_price_display = isset( $amount_strings[ $min_index ] ) ? $amount_strings[ $min_index ] : $fmt( $min );
-                    $price = sprintf( '%s %s', __( 'Starting at', 'tutorpress-pmpro' ), $min_price_display );
-                }
-            }
-        }
-
-        if ( ! is_string( $price ) || $price === '' ) {
-            return $html;
-        }
-
-        ob_start();
-        ?>
-        <div class="tutor-d-flex tutor-align-center tutor-justify-between">
-            <div class="list-item-price tutor-d-flex tutor-align-center">
-                <span class="price tutor-fs-6 tutor-fw-bold tutor-color-black"><?php echo wp_kses_post( $price ); ?></span>
-            </div>
-            <div class="list-item-button">
-                <a href="<?php echo esc_url( get_the_permalink( $course_id ) ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block"><?php esc_html_e( 'View Details', 'tutorpress-pmpro' ); ?></a>
-            </div>
-        </div>
-        <?php
-        return ob_get_clean();
-    }
 
 
 
@@ -874,242 +531,14 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * Check if user has access to the current content
-	 *
-	 * @since 1.0.0
-	 *
-	 * @param int $course_id  current course id.
-	 * @param int $content_id course content like lesson, quiz etc.
-	 *
-	 * @return void
+	 * [REMOVED - Phase 8, Step 8.1: Substep 2]
+	 * pmpro_pricing_single_course() → Moved to Pricing_Display::pmpro_pricing_single_course()
 	 */
-    public function pmpro_pricing_single_course( $course_id, $content_id ) {
-        $course_id  = (int) $course_id;
-        $content_id = (int) $content_id;
-
-        $require = $this->pmpro_pricing( null, $course_id );
-        
-        // Phase 3, Step 3.3: Use our unified access check for consistency
-        // Check if user has membership access to the course content
-        $has_course_access = $this->has_course_access( $course_id, get_current_user_id() );
-        // Convert to boolean (our method may return array of required levels)
-        $has_course_access = ( $has_course_access === true );
-        
-        $is_enrolled        = tutor_utils()->is_enrolled( $course_id, get_current_user_id() );
-        $is_preview_enabled = tutor()->lesson_post_type === get_post_type( $content_id ) ? (bool) get_post_meta( $content_id, '_is_preview', true ) : false;
-        
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[TP-PMPRO] pmpro_pricing_single_course course=' . $course_id . ' content=' . $content_id . ' user=' . get_current_user_id() . ' has_access=' . ( $has_course_access ? 'yes' : 'no' ) . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' is_preview=' . ( $is_preview_enabled ? 'yes' : 'no' ) );
-        }
-
-        // @since v2.0.7 If user has access to the content, allow access; otherwise redirect to course page
-        if ( $has_course_access || $is_enrolled || $is_preview_enabled ) {
-            return;
-        }
-
-        if ( null !== $require ) {
-            wp_safe_redirect( get_permalink( $course_id ) );
-            exit;
-        }
-    }
 
     /**
-	 * Alter tutor enroll box to show PMPro pricing
-	 *
-	 * @param string $html  content to filter.
-	 * @param string $course_id  current course id.
-	 *
-	 * @return string  html content to show on the enrollment section
+	 * [REMOVED - Phase 8, Step 8.1: Substep 2]
+	 * pmpro_pricing() → Moved to Pricing_Display::pmpro_pricing()
 	 */
-    public function pmpro_pricing( $html, $course_id ) {
-        // Phase 2 Fix: Free courses should ALWAYS show their normal "Free" enrollment box
-        // regardless of membership-only mode status
-        $is_free = get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free';
-        if ( $is_free ) {
-            return $html;
-        }
-        
-        $is_enrolled = tutor_utils()->is_enrolled();
-        
-        // Phase 3, Step 3.2: Use our unified access check for consistency
-        // This checks full-site, category-wise, AND course-specific levels
-        $has_course_access = $this->has_course_access( $course_id, get_current_user_id() );
-        
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            $access_type = $has_course_access === true ? 'TRUE' : ( is_array( $has_course_access ) ? 'ARRAY' : 'FALSE' );
-            error_log( '[TP-PMPRO] pmpro_pricing course=' . $course_id . ' user=' . get_current_user_id() . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' has_access=' . $access_type );
-        }
-        
-        // Convert to boolean (our method may return array of required levels)
-        $has_course_access = ( $has_course_access === true );
-
-        /**
-		 * If current user has course access then no need to show price
-		 * plan.
-		 *
-		 * @since v2.0.7
-		 */
-        if ( $is_enrolled || $has_course_access ) {
-            return $html;
-        }
-
-        // Determine which levels to show based on membership-only mode
-        $membership_only_enabled = self::tutorpress_pmpro_membership_only_enabled();
-        
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[TP-PMPRO] pmpro_pricing continuing to show levels, membership_only=' . ( $membership_only_enabled ? 'yes' : 'no' ) );
-        }
-        
-        if ( $membership_only_enabled ) {
-            // Phase 2: In membership-only mode, show ALL full-site membership levels
-            $required_levels = self::pmpro_get_active_full_site_levels();
-            
-            // Get full level objects
-            $level_objects = array();
-            foreach ( $required_levels as $level_id ) {
-                $level = pmpro_getLevel( $level_id );
-                if ( $level ) {
-                    $level_objects[] = $level;
-                }
-            }
-            $required_levels = $level_objects;
-            
-            // If no full-site levels exist, return original HTML (shouldn't happen if toggle validation works)
-            if ( empty( $required_levels ) ) {
-                return $html;
-            }
-        } else {
-            // Phase 2: In hybrid mode, determine which levels to show based on selling option
-            $selling_option = \TUTOR\Course::get_selling_option( $course_id );
-            
-            if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
-                // For 'membership' selling option, show full-site membership levels
-                $required_levels = self::pmpro_get_active_full_site_levels();
-                
-                // Get full level objects
-                $level_objects = array();
-                foreach ( $required_levels as $level_id ) {
-                    $level = pmpro_getLevel( $level_id );
-                    if ( $level ) {
-                        $level_objects[] = $level;
-                    }
-                }
-                $required_levels = $level_objects;
-                
-                if ( empty( $required_levels ) ) {
-                    return $html;
-                }
-            } elseif ( \TUTOR\Course::SELLING_OPTION_ALL === $selling_option ) {
-                // For 'all' selling option, show ALL levels: course-specific (one-time + subscription) + full-site membership
-                
-                // Get ALL course-specific levels
-                global $wpdb;
-                $course_level_ids = array();
-                if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-                    $course_level_ids = $wpdb->get_col( $wpdb->prepare( 
-                        "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", 
-                        $course_id 
-                    ) );
-                }
-                
-                // Get full-site membership levels
-                $full_site_level_ids = self::pmpro_get_active_full_site_levels();
-                
-                // Combine and remove duplicates
-                $all_level_ids = array_unique( array_merge( $course_level_ids, $full_site_level_ids ) );
-                
-                // Get full level objects
-                $required_levels = array();
-                foreach ( $all_level_ids as $level_id ) {
-                    $level = pmpro_getLevel( $level_id );
-                    if ( $level ) {
-                        $required_levels[] = $level;
-                    }
-                }
-                
-                if ( empty( $required_levels ) ) {
-                    return $html;
-                }
-            } else {
-                // For other selling options (one_time, subscription, both),
-                // show COURSE-SPECIFIC PMPro levels (exclude full-site membership levels)
-                
-                // Get ALL levels associated with this course via pmpro_memberships_pages
-                global $wpdb;
-                $level_ids = array();
-                if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-                    $level_ids = $wpdb->get_col( $wpdb->prepare( 
-                        "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", 
-                        $course_id 
-                    ) );
-                }
-                
-                if ( empty( $level_ids ) ) {
-                    // No PMPro level associations found, return original HTML
-                    return $html;
-                }
-                
-                // Get full level objects
-                $required_levels = array();
-                foreach ( $level_ids as $lid ) {
-                    $level = pmpro_getLevel( $lid );
-                    if ( $level ) {
-                        $required_levels[] = $level;
-                    }
-                }
-                
-                if ( empty( $required_levels ) ) {
-                    return $html;
-                }
-                
-                // Filter out full-site and category-wise membership levels - only show course-specific levels
-                $course_specific_levels = array();
-                foreach ( $required_levels as $level ) {
-                    $level_id = is_object( $level ) ? $level->id : $level;
-                    $membership_model = get_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_membership_model', true );
-                    
-                    // Include level if it does NOT have a membership_model meta (course-specific)
-                    // OR if it has a model that is NOT full_website_membership or category_wise_membership
-                    if ( empty( $membership_model ) || 
-                         ( $membership_model !== 'full_website_membership' && 
-                           $membership_model !== 'category_wise_membership' ) ) {
-                        $course_specific_levels[] = $level;
-                    }
-                }
-                
-                if ( empty( $course_specific_levels ) ) {
-                    // All levels were full-site or category membership, return original HTML
-                    return $html;
-                }
-                
-                $required_levels = $course_specific_levels;
-            }
-        }
-        
-        // Calculate active prices for all levels (Step 3.4b: Dynamic Pricing)
-        // This ensures frontend displays reflect real-time sale status with zero delay
-        foreach ( $required_levels as &$level ) {
-            // Get active price (accounts for sale schedule)
-            $active_price = $this->get_active_price_for_level( $level->id );
-            
-            // Attach active price data to level object for template use
-            $level->active_price = $active_price['price'];
-            $level->regular_price_display = $active_price['regular_price'];
-            $level->is_on_sale = $active_price['on_sale'];
-        }
-        unset( $level ); // Break reference
-        
-        // Render membership pricing template with the appropriate levels
-        $level_page_id  = apply_filters( 'TUTORPRESS_PMPRO_level_page_id', pmpro_getOption( 'levels_page_id' ) );
-        $level_page_url = get_the_permalink( $level_page_id );
-
-        //phpcs:ignore
-        extract( $this->get_pmpro_currency() );
-
-        ob_start();
-        include dirname( __DIR__ ) . '/views/pmpro-pricing.php';
-        return ob_get_clean();
-    }
 
     /**
 	 * Remove the price if Membership Plan activated
@@ -1180,7 +609,7 @@ class PaidMembershipsPro {
 	 *
 	 * @return mixed
 	 */
-    private function get_pmpro_currency() {
+    public function get_pmpro_currency() {
         global $pmpro_currencies, $pmpro_currency;
         $current_currency = $pmpro_currency ? $pmpro_currency : '';
         $currency         = 'USD' === $current_currency ?
@@ -1478,7 +907,7 @@ class PaidMembershipsPro {
 	 *
 	 * @return bool
 	 */
-    private function is_pmpro_enabled() {
+    public function is_pmpro_enabled() {
         $forced = apply_filters( 'tutorpress_pmpro_enabled', null );
         if ( is_bool( $forced ) ) {
             return $forced;
@@ -1755,24 +1184,10 @@ class PaidMembershipsPro {
      * @param int    $course_id Course ID.
      * @return string Modified HTML or original HTML.
      */
-    public function show_pmpro_membership_plans( $html, $course_id ) {
-        // Always respect free courses - they should never show PMPro pricing
-        $is_free = get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free';
-        if ( $is_free ) {
-            return $html;
-        }
-        
-        // For all paid courses with PMPro monetization, show PMPro pricing:
-        // - one_time: Shows PMPro one-time level
-        // - subscription: Shows PMPro subscription plans
-        // - both: Shows PMPro one-time + subscription plans
-        // - membership: Shows full-site membership levels
-        // - all: Shows all PMPro levels (course-specific + full-site membership)
-        //
-        // The pmpro_pricing() method handles filtering which levels to show
-        // based on membership-only mode and selling option.
-        return $this->pmpro_pricing( $html, $course_id );
-    }
+    /**
+	 * [REMOVED - Phase 8, Step 8.1: Substep 3]
+	 * show_pmpro_membership_plans() → Moved to Pricing_Display::show_pmpro_membership_plans()
+	 */
 
     /**
      * Filter callback for tutor_membership_only_mode.
@@ -1901,148 +1316,21 @@ class PaidMembershipsPro {
      * @param int $course_id Course ID to link to.
      * @return string HTML for the pricing button.
      */
-    public function render_membership_price_button( $course_id = 0 ) {
-        // If no course_id provided, try to get from current context
-        if ( ! $course_id ) {
-            $course_id = get_the_ID();
-        }
-
-        // Link to the individual course page
-        $course_url = get_permalink( $course_id );
-
-        if ( ! $course_url ) {
-            $course_url = home_url();
-        }
-
-        ob_start();
-        ?>
-        <div class="tutor-d-flex tutor-align-center">
-            <a href="<?php echo esc_url( $course_url ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block">
-                <?php esc_html_e( 'View Pricing', 'tutorpress-pmpro' ); ?>
-            </a>
-        </div>
-        <?php
-        return ob_get_clean();
-    }
+    /**
+     * [REMOVED - Phase 8, Step 8.1: Substep 1]
+     * render_membership_price_button() → Moved to Pricing_Display::render_membership_price_button()
+     */
 
     /**
-     * Filter to block guest enrollment attempts when membership-only mode is enabled.
-     * 
-     * When membership-only mode is ON, guests cannot enroll in courses.
-     * They must register and purchase a membership first.
-     *
-     * @since 1.4.0
-     * @param bool $allowed Whether guest enrollment is allowed.
-     * @param int  $course_id Course ID.
-     * @param int  $user_id User ID (0 for guests).
-     * @return bool False if membership-only mode is enabled, otherwise original value.
+     * [REMOVED - Phase 8, Step 8.1: Substep 3]
+     * filter_allow_guest_attempt_enrollment() → Moved to Pricing_Display::filter_allow_guest_attempt_enrollment()
      */
-    public function filter_allow_guest_attempt_enrollment( $allowed, $course_id, $user_id ) {
-        if ( self::tutorpress_pmpro_membership_only_enabled() ) {
-            return false;
-        }
-
-        return $allowed;
-    }
 
     /**
-     * Handle enrollment flagging after enrollment is completed.
-     * 
-     * Mark enrollments as PMPro membership-based when appropriate.
-     * This helps track which enrollments came from membership plans vs individual purchases.
-     *
-     * @since 1.4.0
-     * @param int $course_id Course ID.
-     * @param int $user_id User ID.
-     * @param int $enrolled_id Enrollment ID.
-     * @return void
+     * [REMOVED - Phase 8, Step 8.1: Substep 3]
+     * handle_after_enrollment_completed() → Moved to Pricing_Display::handle_after_enrollment_completed()
+     * handle_bundle_course_membership_enrollment() → Moved to Pricing_Display::handle_bundle_course_membership_enrollment()
      */
-    public function handle_after_enrollment_completed( $course_id, $user_id, $enrolled_id ) {
-        $membership_enrollment_flag_required = false;
-
-        // For membership-only mode: flag all enrollments as membership-based
-        if ( self::tutorpress_pmpro_membership_only_enabled() ) {
-            $membership_enrollment_flag_required = true;
-        }
-
-        // For hybrid mode: check if this enrollment is via PMPro membership
-        // (user has active membership level)
-        if ( ! $membership_enrollment_flag_required && function_exists( 'pmpro_hasMembershipLevel' ) ) {
-            if ( pmpro_hasMembershipLevel( null, $user_id ) ) {
-                $membership_enrollment_flag_required = true;
-            }
-        }
-
-        if ( $membership_enrollment_flag_required ) {
-            // Get user's active PMPro membership levels
-            $user_levels = function_exists( 'pmpro_getMembershipLevelsForUser' ) 
-                ? pmpro_getMembershipLevelsForUser( $user_id ) 
-                : array();
-
-            if ( ! empty( $user_levels ) ) {
-                // Get the first active level (could be enhanced to find the specific level that grants access)
-                $level = is_array( $user_levels ) ? reset( $user_levels ) : null;
-                $level_id = $level && isset( $level->id ) ? (int) $level->id : 0;
-
-                if ( $level_id > 0 ) {
-                    // Mark this enrollment as PMPro membership-based
-                    // Store the level ID in enrollment meta for tracking
-                    update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
-                    update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
-
-                    // Handle bundle courses if Course Bundle addon is enabled
-                    if ( tutor_utils()->is_addon_enabled( 'course-bundle' ) && 
-                         function_exists( 'tutor' ) && 
-                         isset( tutor()->bundle_post_type ) && 
-                         tutor()->bundle_post_type === get_post_type( $course_id ) ) {
-                        
-                        $this->handle_bundle_course_membership_enrollment( $course_id, $user_id, $level_id );
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Handle auto-enrollment in bundle courses for membership enrollments.
-     * 
-     * When a user enrolls in a bundle via membership,
-     * automatically enroll them in all courses within the bundle.
-     *
-     * @since 1.4.0
-     * @param int $bundle_id Bundle ID.
-     * @param int $user_id User ID.
-     * @param int $level_id PMPro level ID.
-     * @return void
-     */
-    private function handle_bundle_course_membership_enrollment( $bundle_id, $user_id, $level_id ) {
-        // Check if BundleModel class exists (from Course Bundle addon)
-        if ( ! class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
-            return;
-        }
-
-        $bundle_course_ids = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_course_ids( $bundle_id );
-        
-        foreach ( $bundle_course_ids as $bundle_course_id ) {
-            // Check if user has access to this course via their membership
-            $has_access = $this->has_course_access( $bundle_course_id, $user_id );
-            
-            if ( $has_access ) {
-                // Auto-enroll in the bundle course
-                add_filter( 'tutor_enroll_data', function( $enroll_data ) {
-                    return array_merge( $enroll_data, array( 'post_status' => 'completed' ) );
-                } );
-                
-                $course_enrolled_id = tutor_utils()->do_enroll( $bundle_course_id, 0, $user_id, false );
-                
-                if ( $course_enrolled_id ) {
-                    // Mark this course enrollment as membership-based too
-                    update_post_meta( $course_enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
-                    update_post_meta( $course_enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
-                }
-            }
-        }
-    }
 
     /**
      * Get the active price for a PMPro level, accounting for sale schedule.
