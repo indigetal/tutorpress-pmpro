@@ -330,6 +330,10 @@ class PaidMembershipsPro {
             // - array of required levels if user doesn't have access
             $user_has_access = $this->has_course_access( $course_id );
             
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[TP-PMPRO] filter_course_loop_price_pmpro course=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
+            }
+            
             // Only show original HTML if user truly has access (returns exactly true)
             if ( $user_has_access === true ) {
                 return $html;
@@ -361,6 +365,18 @@ class PaidMembershipsPro {
             $has_levels = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) ) > 0;
         }
         if ( ! $has_levels ) {
+            return $html;
+        }
+
+        // Phase 1, Step 1.1 Extension: Check if user has access via any membership type
+        // If user has access, return original HTML (don't show pricing)
+        $user_has_access = $this->has_course_access( $course_id );
+        
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[TP-PMPRO] filter_course_loop_price_pmpro (hybrid mode) course=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
+        }
+        
+        if ( $user_has_access === true ) {
             return $html;
         }
 
@@ -878,6 +894,39 @@ class PaidMembershipsPro {
                 foreach ( $term_ids as $term_id ) {
                     if ( in_array( $term_id, $member_cats ) ) {
                         $has_course_access = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Check course-specific levels (no membership model, but associated via pmpro_memberships_pages)
+        if ( ! $has_course_access ) {
+            foreach ( $levels as $level ) {
+                // Skip expired levels (already filtered above, but double-check)
+                $endtime = (int) $level->enddate;
+                if ( 0 < $endtime && $endtime < tutor_time() ) {
+                    continue;
+                }
+
+                // Check if this level is associated with the specific course
+                // Course-specific levels don't have TUTORPRESS_PMPRO_membership_model meta
+                $model = get_pmpro_membership_level_meta( $level->id, 'TUTORPRESS_PMPRO_membership_model', true );
+
+                // Only check course-specific association if no membership model is set
+                if ( empty( $model ) ) {
+                    $associated = $wpdb->get_var( $wpdb->prepare(
+                        "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} 
+                         WHERE membership_id = %d AND page_id = %d",
+                        $level->id,
+                        $course_id
+                    ) );
+
+                    if ( $associated > 0 ) {
+                        $has_course_access = true;
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( '[TP-PMPRO] has_course_access granted via course-specific level=' . $level->id . ' course=' . $course_id );
+                        }
                         break;
                     }
                 }
