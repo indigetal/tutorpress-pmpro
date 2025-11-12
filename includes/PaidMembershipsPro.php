@@ -1010,11 +1010,21 @@ class PaidMembershipsPro {
         $content_id = (int) $content_id;
 
         $require = $this->pmpro_pricing( null, $course_id );
-        // @since v2.0.7 If user has no access to the content then get back to the course.
-        $has_course_access  = tutor_utils()->has_user_course_content_access();
+        
+        // Phase 3, Step 3.3: Use our unified access check for consistency
+        // Check if user has membership access to the course content
+        $has_course_access = $this->has_course_access( $course_id, get_current_user_id() );
+        // Convert to boolean (our method may return array of required levels)
+        $has_course_access = ( $has_course_access === true );
+        
         $is_enrolled        = tutor_utils()->is_enrolled( $course_id, get_current_user_id() );
         $is_preview_enabled = tutor()->lesson_post_type === get_post_type( $content_id ) ? (bool) get_post_meta( $content_id, '_is_preview', true ) : false;
+        
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[TP-PMPRO] pmpro_pricing_single_course course=' . $course_id . ' content=' . $content_id . ' user=' . get_current_user_id() . ' has_access=' . ( $has_course_access ? 'yes' : 'no' ) . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' is_preview=' . ( $is_preview_enabled ? 'yes' : 'no' ) );
+        }
 
+        // @since v2.0.7 If user has access to the content, allow access; otherwise redirect to course page
         if ( $has_course_access || $is_enrolled || $is_preview_enabled ) {
             return;
         }
