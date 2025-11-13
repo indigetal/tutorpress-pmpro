@@ -58,6 +58,22 @@ class PaidMembershipsPro {
     private $enrollment_ui;
 
     /**
+     * Level settings service instance.
+     *
+     * @since 1.0.0
+     * @var \TUTORPRESS_PMPRO\Admin\Level_Settings
+     */
+    private $level_settings;
+
+    /**
+     * Admin notices service instance.
+     *
+     * @since 1.0.0
+     * @var \TUTORPRESS_PMPRO\Admin\Admin_Notices
+     */
+    private $admin_notices;
+
+    /**
 	 * Register hooks
 	 */
     public function __construct() {
@@ -73,10 +89,16 @@ class PaidMembershipsPro {
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrollment-ui.php';
         $this->enrollment_ui = new \TUTORPRESS_PMPRO\Frontend\Enrollment_UI( $this->access_checker, $this->pricing_display );
         
+        // Phase 9, Substep 1 & 2: Load admin level settings service
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/admin/class-level-settings.php';
+        $this->level_settings = new \TUTORPRESS_PMPRO\Admin\Level_Settings();
+        
+        // Phase 9, Substep 3: Load admin notices service
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/admin/class-admin-notices.php';
+        $this->admin_notices = new \TUTORPRESS_PMPRO\Admin\Admin_Notices();
+        
         // Register frontend pricing hooks late in page lifecycle
         add_action( 'wp', array( $this, 'init_pmpro_price_overrides' ), 20 );
-        add_action( 'pmpro_membership_level_after_other_settings', array( $this, 'display_courses_categories' ) );
-        add_action( 'pmpro_save_membership_level', array( $this, 'pmpro_settings' ) );
         add_filter( 'tutor_course/single/add-to-cart', array( $this, 'tutor_course_add_to_cart' ) );
         add_filter( 'tutor_course_price', array( $this, 'tutor_course_price' ) );
         add_filter( 'tutor-loop-default-price', array( $this, 'add_membership_required' ) );
@@ -90,22 +112,27 @@ class PaidMembershipsPro {
         //   - tutor/course/single/entry-box/purchasable → show_pmpro_membership_plans
         //   - tutor_allow_guest_attempt_enrollment → filter_allow_guest_attempt_enrollment
         //   - tutor_after_enrolled → handle_after_enrollment_completed
-        add_filter( 'tutor/options/attr', array( $this, 'add_options' ) );
+
+        // Phase 9, Substep 1: Moved to Admin\Level_Settings service
+        // Level_Settings:
+        //   - pmpro_membership_level_after_other_settings → display_courses_categories
+        //   - pmpro_save_membership_level → pmpro_settings
+        //   - tutor/options/attr → add_options
+        //   - manage_{course_post_type}_posts_columns → remove_price_column
+        //   - pmpro_membership_levels_table_extra_cols_header → level_category_list
 
 		if ( tutor_utils()->has_pmpro( true ) ) {
 			// Only wire PMPro behaviors when PMPro is the selected monetization engine (overridable via filter)
 			if ( ! $this->is_pmpro_enabled() ) {
 				return;
 			}
-            // Remove price column if PM pro used.
-            add_filter( 'manage_' . tutor()->course_post_type . '_posts_columns', array( $this, 'remove_price_column' ), 11, 1 );
 
-            // Add categories column to pm pro level table.
-            add_action( 'pmpro_membership_levels_table_extra_cols_header', array( $this, 'level_category_list' ) );
-            add_action( 'pmpro_membership_levels_table_extra_cols_body', array( $this, 'level_category_list_body' ) );
-            add_filter( 'pmpro_membership_levels_table', array( $this, 'outstanding_cat_notice' ) );
+            // Phase 9, Substep 2: Moved to Admin\Level_Settings service
+            // - pmpro_membership_levels_table_extra_cols_body → level_category_list_body
+            // - pmpro_membership_levels_table → outstanding_cat_notice
+            // - admin_enqueue_scripts → admin_script
+
             add_action( 'wp_enqueue_scripts', array( $this, 'pricing_style' ) );
-            add_action( 'admin_enqueue_scripts', array( $this, 'admin_script' ) );
 
             add_filter( 'tutor_course_expire_validity', array( $this, 'filter_expire_time' ), 99, 2 );
 			add_action( 'pmpro_after_change_membership_level', array( $this, 'remove_course_access' ), 10, 3 );
@@ -130,9 +157,9 @@ class PaidMembershipsPro {
 			add_filter( 'pmpro_email_data', array( $this, 'filter_email_data_sale_price' ), 10, 2 );
 			add_action( 'pmpro_invoice_bullets_bottom', array( $this, 'filter_invoice_sale_note' ), 10, 1 );
 			
-			// Display notices on PMPro level edit page
-			add_action( 'pmpro_membership_level_after_general_information', array( $this, 'display_course_association_notice' ), 10 );
-			add_action( 'pmpro_membership_level_after_billing_details_settings', array( $this, 'display_sale_price_notice_on_level_edit' ), 10 );
+			// Phase 9, Substep 3: Moved to Admin\Admin_Notices service
+			// - pmpro_membership_level_after_general_information → display_course_association_notice
+			// - pmpro_membership_level_after_billing_details_settings → display_sale_price_notice_on_level_edit
         }
     }
 
@@ -255,189 +282,21 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * Remove price column
+	 * [REMOVED - Phase 9, Substep 1]
+	 * remove_price_column() → Moved to Admin\Level_Settings::remove_price_column()
 	 *
-	 * @param array $columns columns.
+	 * [REMOVED - Phase 9, Substep 1]
+	 * display_courses_categories() → Moved to Admin\Level_Settings::display_courses_categories()
 	 *
-	 * @return array
+	 * [REMOVED - Phase 9, Substep 1]
+	 * pmpro_settings() → Moved to Admin\Level_Settings::pmpro_settings()
+	 *
+	 * [REMOVED - Phase 9, Substep 1]
+	 * add_options() → Moved to Admin\Level_Settings::add_options()
+	 *
+	 * [REMOVED - Phase 9, Substep 1]
+	 * level_category_list() → Moved to Admin\Level_Settings::level_category_list()
 	 */
-    public function remove_price_column( $columns = array() ) {
-        if ( isset( $columns['price'] ) ) {
-            unset( $columns['price'] );
-        }
-        return $columns;
-    }
-
-    /**
-	 * Display courses categories
-	 *
-	 * @return void
-	 */
-    public function display_courses_categories() {
-        global $wpdb;
-
-        if ( Input::has( 'edit' ) ) {
-            $edit = intval( Input::sanitize_request_data( 'edit' ) );
-        } else {
-            $edit = false;
-        }
-
-        // get the level...
-        if ( ! empty( $edit ) && $edit > 0 ) {
-            $level   = $wpdb->get_row(
-                $wpdb->prepare(
-                    "SELECT * FROM $wpdb->pmpro_membership_levels
-                    WHERE id = %d LIMIT 1",
-                    $edit
-                ),
-                OBJECT
-            );
-            $temp_id = $level->id;
-        } elseif ( ! empty( $copy ) && $copy > 0 ) {
-            $level     = $wpdb->get_row(
-                $wpdb->prepare(
-                    "SELECT * FROM $wpdb->pmpro_membership_levels
-                    WHERE id = %d LIMIT 1",
-                    $copy
-                ),
-                OBJECT
-            );
-            $temp_id   = $level->id;
-            $level->id = null;
-        } elseif ( empty( $level ) ) {
-            // didn't find a membership level, let's add a new one...
-            $level                    = new \stdClass();
-            $level->id                = null;
-            $level->name              = null;
-            $level->description       = null;
-            $level->confirmation      = null;
-            $level->billing_amount    = null;
-            $level->trial_amount      = null;
-            $level->initial_payment   = null;
-            $level->billing_limit     = null;
-            $level->trial_limit       = null;
-            $level->expiration_number = null;
-            $level->expiration_period = null;
-            $edit                     = -1;
-        }
-
-        // defaults for new levels.
-        if ( empty( $copy ) && -1 == $edit ) {
-            $level->cycle_number = 1;
-            $level->cycle_period = 'Month';
-        }
-
-        // grab the categories for the given level...
-        if ( ! empty( $temp_id ) ) {
-            $level->categories = $wpdb->get_col(
-                $wpdb->prepare(
-                    "SELECT c.category_id
-                    FROM $wpdb->pmpro_memberships_categories c
-                    WHERE c.membership_id = %d",
-                    $temp_id
-                )
-            );
-        }
-
-        if ( empty( $level->categories ) ) {
-            $level->categories = array();
-        }
-
-        $level_categories = $level->categories;
-        $highlight        = get_pmpro_membership_level_meta( $level->id, 'TUTORPRESS_PMPRO_level_highlight', true );
-
-        include_once TUTORPRESS_PMPRO()->path . 'views/pmpro-content-settings.php';
-    }
-
-    /**
-     * PM Pro save tutor settings
-     *
-     * @param int $level_id level id.
-     *
-     * @return void
-     */
-    public function pmpro_settings( $level_id ) {
-
-        if ( 'pmpro_settings' !== Input::post( 'tutor_action' ) ) {
-            return;
-        }
-
-        // Admin-only gating: prevent non-admins from modifying membership model and highlight settings
-        if ( ! current_user_can( 'manage_options' ) ) {
-            // Log security audit trail
-            if ( function_exists( 'error_log' ) ) {
-                error_log( sprintf(
-                    '[TP-PMPRO] Unauthorized attempt to modify membership model for level %d by user %d',
-                    absint( $level_id ),
-                    get_current_user_id()
-                ) );
-            }
-            return;
-        }
-
-        $TUTORPRESS_PMPRO_membership_model = Input::post( 'TUTORPRESS_PMPRO_membership_model' );
-        $highlight_level              = Input::post( 'TUTORPRESS_PMPRO_level_highlight' );
-
-        if ( $TUTORPRESS_PMPRO_membership_model ) {
-            update_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_membership_model', $TUTORPRESS_PMPRO_membership_model );
-        }
-
-        if ( $highlight_level && 1 == $highlight_level ) {
-            update_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_level_highlight', 1 );
-        } else {
-            delete_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_level_highlight' );
-        }
-    }
-
-    /**
-	 * Add options.
-	 *
-	 * @param array $attr attr.
-	 *
-	 * @return array
-	 */
-    public function add_options( $attr ) {
-        $attr['TUTORPRESS_PMPRO'] = array(
-            'label'    => __( 'PMPro-TutorPress', 'tutorpress-pmpro' ),
-            'slug'     => 'pm-pro',
-            'desc'     => __( 'Paid Membership', 'tutorpress-pmpro' ),
-            'template' => 'basic',
-            'icon'     => 'tutor-icon-brand-paid-membersip-pro',
-            'blocks'   => array(
-                array(
-                    'label'      => '',
-                    'slug'       => 'pm_pro',
-                    'block_type' => 'uniform',
-                    'fields'     => array(
-                        array(
-                            'key'     => 'tutorpress_pmpro_membership_only_mode',
-                            'type'    => 'toggle_switch',
-                            'label'   => __( 'Membership-Only Mode', 'tutorpress-pmpro' ),
-                            'label_title' => '',
-                            'default' => 'off',
-                            'desc'    => __( 'Enable this to sell courses exclusively through membership plans. Individual course sales will be disabled.', 'tutorpress-pmpro' ),
-                        ),
-                        array(
-                            'key'     => 'pmpro_moneyback_day',
-                            'type'    => 'number',
-                            'label'   => __( 'Moneyback gurantee in', 'tutorpress-pmpro' ),
-                            'default' => '0',
-                            'desc'    => __( 'Days in you gurantee moneyback. Set 0 for no moneyback.', 'tutorpress-pmpro' ),
-                        ),
-                        array(
-                            'key'     => 'pmpro_no_commitment_message',
-                            'type'    => 'text',
-                            'label'   => __( 'No commitment message', 'tutorpress-pmpro' ),
-                            'default' => '',
-                            'desc'    => __( 'Keep empty to hide', 'tutorpress-pmpro' ),
-                        ),
-                    ),
-                ),
-            ),
-        );
-
-        return $attr;
-    }
 
     /**
 	 * Required levels
@@ -552,109 +411,20 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * Level category list
-	 *
-	 * @param mixed $reordered_levels reordered levels.
-	 *
-	 * @return void
+	 * [REMOVED - Phase 9, Substep 1]
+	 * level_category_list() → Moved to Admin\Level_Settings::level_category_list()
 	 */
-    public function level_category_list( $reordered_levels ) {
-        echo '<th>' . esc_html__( 'Recommended', 'tutorpress-pmpro' ) . '</th>';
-        echo '<th>' . esc_html__( 'Type', 'tutorpress-pmpro' ) . '</th>';
-    }
 
     /**
-	 * Level category list body
+	 * [REMOVED - Phase 9, Substep 2]
+	 * level_category_list_body() → Moved to Admin\Level_Settings::level_category_list_body()
 	 *
-	 * @param object $level level object.
+	 * [REMOVED - Phase 9, Substep 2]
+	 * get_pmpro_currency() → Moved to Admin\Level_Settings::get_pmpro_currency() (private helper)
 	 *
-	 * @return void
+	 * [REMOVED - Phase 9, Substep 2]
+	 * outstanding_cat_notice() → Moved to Admin\Level_Settings::outstanding_cat_notice()
 	 */
-    public function level_category_list_body( $level ) {
-        $model     = get_pmpro_membership_level_meta( $level->id, 'TUTORPRESS_PMPRO_membership_model', true );
-        $highlight = get_pmpro_membership_level_meta( $level->id, 'TUTORPRESS_PMPRO_level_highlight', true );
-
-        echo '<td>' . ( esc_html( $highlight ) ? '<img src="' . esc_url( TUTORPRESS_PMPRO()->url . 'assets/images/star.svg"/>' ) : '' ) . '</td>';
-
-        echo '<td>';
-
-        if ( 'full_website_membership' === $model ) {
-            echo '<b>' . esc_html__( 'Full Site Membership', 'tutorpress-pmpro' ) . '</b>';
-        } elseif ( 'category_wise_membership' === $model ) {
-            echo '<b>' . esc_html__( 'Category Wise Membership', 'tutorpress-pmpro' ) . '</b><br/>';
-
-            $cats = pmpro_getMembershipCategories( $level->id );
-
-            if ( is_array( $cats ) && count( $cats ) ) {
-                global $wpdb;
-                $cats_str   = QueryHelper::prepare_in_clause( $cats );
-                $terms      = $wpdb->get_results( "SELECT * FROM {$wpdb->terms} WHERE term_id IN (" . $cats_str . ')' );
-                $term_links = array_map(
-                    function( $term ) {
-                        return '<small>' . $term->name . '</small>';
-                    },
-                    $terms
-                );
-
-                echo wp_kses_post( implode( ', ', $term_links ) );
-            }
-        }
-        //phpcs:enable
-
-        echo '</td>';
-    }
-
-    /**
-	 * Get PMPro currency
-	 *
-	 * @return mixed
-	 */
-    public function get_pmpro_currency() {
-        global $pmpro_currencies, $pmpro_currency;
-        $current_currency = $pmpro_currency ? $pmpro_currency : '';
-        $currency         = 'USD' === $current_currency ?
-                                array( 'symbol' => '$' ) :
-                                ( isset( $pmpro_currencies[ $current_currency ] ) ? $pmpro_currencies[ $current_currency ] : null );
-
-        $currency_symbol   = ( is_array( $currency ) && isset( $currency['symbol'] ) ) ? $currency['symbol'] : '';
-        $currency_position = ( is_array( $currency ) && isset( $currency['position'] ) ) ? strtolower( $currency['position'] ) : 'left';
-
-        return compact( 'currency_symbol', 'currency_position' );
-    }
-
-    /**
-	 * Outstanding cat notice.
-	 *
-	 * @param string $html html.
-	 *
-	 * @return string
-	 */
-    public function outstanding_cat_notice( $html ) {
-        global $wpdb;
-
-        // Get all categories from all levels.
-        $level_cats = $wpdb->get_col(
-            "SELECT cat.category_id 
-            FROM {$wpdb->pmpro_memberships_categories} cat 
-                INNER JOIN {$wpdb->pmpro_membership_levels} lvl ON lvl.id=cat.membership_id"
-        );
-        ! is_array( $level_cats ) ? $level_cats = array() : 0;
-
-        // Get all categories and check if exist in any level.
-        $outstanding = array();
-        $course_cats = get_terms( 'course-category', array( 'hide_empty' => false ) );
-        foreach ( $course_cats as $cat ) {
-            ! in_array( $cat->term_id, $level_cats ) ? $outstanding[] = $cat : 0;
-        }
-
-        ob_start();
-
-        //phpcs:ignore
-        extract( $this->get_pmpro_currency() ); // $currency_symbol, $currency_position
-        include dirname( __DIR__ ) . '/views/outstanding-catagory-notice.php';
-
-        return $html . ob_get_clean();
-    }
 
     /**
 	 * Style enqueue
@@ -668,16 +438,9 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * Admin style enqueue
-	 *
-	 * @return void
+	 * [REMOVED - Phase 9, Substep 2]
+	 * admin_script() → Moved to Admin\Level_Settings::admin_script()
 	 */
-    public function admin_script() {
-        $screen = get_current_screen();
-        if ( 'memberships_page_pmpro-membershiplevels' === $screen->id ) {
-            wp_enqueue_style( 'tutorpress-pmpro', TUTORPRESS_PMPRO()->url . 'assets/css/pm-pro.css', array(), TUTORPRESS_PMPRO_VERSION );
-        }
-    }
 
     /**
 	 * Filter course expire time
@@ -1588,204 +1351,12 @@ class PaidMembershipsPro {
     }
 
     /**
-     * Display course association notice on PMPro level edit page.
-     *
-     * Shows at the top of General Information section for all TutorPress-managed levels.
-     *
-     * @since 1.5.0
-     * @return void
-     */
-    public function display_course_association_notice() {
-        // Only run on level edit page
-        if ( ! \TUTOR\Input::has( 'edit' ) ) {
-            return;
-        }
-
-        $level_id = intval( \TUTOR\Input::sanitize_request_data( 'edit' ) );
-        if ( $level_id <= 0 ) {
-            return;
-        }
-
-        // Check if this level is associated with a TutorPress course
-        $course_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true );
-
-        if ( empty( $course_id ) ) {
-            return; // Not a TutorPress-managed level
-        }
-
-        $course_title = get_the_title( $course_id );
-        $course_edit_url = admin_url( 'post.php?post=' . $course_id . '&action=edit' );
-        
-        ?>
-        <tr>
-            <td colspan="2">
-                <div class="pmpro_course_association_notice" style="background: #f7f7f7; border-left: 4px solid #72aee6; padding: 12px 15px; margin: 10px 0;">
-                    <p style="margin: 0; font-size: 13px; color: #333;">
-                        <span class="dashicons dashicons-welcome-learn-more" style="font-size: 16px; vertical-align: middle; color: #72aee6;"></span>
-                        <strong><?php esc_html_e( 'TutorPress Course Level', 'tutorpress-pmpro' ); ?></strong>
-                        <br>
-                        <span style="margin-left: 22px; color: #666;">
-                            <?php 
-                            printf(
-                                __( 'This membership level is managed by TutorPress for: %s', 'tutorpress-pmpro' ),
-                                '<a href="' . esc_url( $course_edit_url ) . '" target="_blank" style="text-decoration: none;">' . esc_html( $course_title ) . ' <span class="dashicons dashicons-external" style="font-size: 14px; text-decoration: none;"></span></a>'
-                            );
-                            ?>
-                        </span>
-                    </p>
-                </div>
-            </td>
-        </tr>
-        <?php
-    }
-
-    /**
-     * Display sale price notice on PMPro level edit page.
-     *
-     * Shows in Billing Details section when a sale exists (active or scheduled),
-     * including sale price details and schedule.
-     *
-     * @since 1.5.0
-     * @return void
-     */
-    public function display_sale_price_notice_on_level_edit() {
-        // Only run on level edit page
-        if ( ! \TUTOR\Input::has( 'edit' ) ) {
-            return;
-        }
-
-        $level_id = intval( \TUTOR\Input::sanitize_request_data( 'edit' ) );
-        if ( $level_id <= 0 ) {
-            return;
-        }
-
-        // Check if this level is associated with a TutorPress course
-        $course_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true );
-
-        if ( empty( $course_id ) ) {
-            return; // Not a TutorPress-managed level
-        }
-
-        // Check if sale price exists in meta
-        $sale_price = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', true );
-        $regular_price_meta = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', true );
-        
-        if ( empty( $sale_price ) || empty( $regular_price_meta ) || floatval( $regular_price_meta ) <= 0 ) {
-            return; // No sale configured
-        }
-        
-        $regular_price = floatval( $regular_price_meta );
-
-        // Get sale schedule
-        $sale_from = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from', true );
-        $sale_to = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to', true );
-
-        // Determine sale status (active, scheduled, or expired)
-        $sale_status = 'active'; // Default for open-ended sales
-        $schedule_text = '';
-        
-        if ( ! empty( $sale_from ) && ! empty( $sale_to ) ) {
-            // Get current time in GMT (matching storage format)
-            if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) ) {
-                $now = \Tutor\Helpers\DateTimeHelper::now()->format( 'U' );
-                $from_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_from )->format( 'U' );
-                $to_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_to )->format( 'U' );
-            } else {
-                $now = current_time( 'timestamp', true );
-                $from_timestamp = strtotime( $sale_from );
-                $to_timestamp = strtotime( $sale_to );
-            }
-
-            // Determine status
-            if ( $now < $from_timestamp ) {
-                $sale_status = 'scheduled';
-            } elseif ( $now > $to_timestamp ) {
-                // Sale expired - don't show notice
-                return;
-            } else {
-                $sale_status = 'active';
-            }
-
-            // Format dates for display in local timezone
-            if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) && method_exists( '\Tutor\Helpers\DateTimeHelper', 'get_gmt_to_user_timezone_date' ) ) {
-                $from_formatted = \Tutor\Helpers\DateTimeHelper::get_gmt_to_user_timezone_date( $sale_from, 'M j, Y g:i A' );
-                $to_formatted = \Tutor\Helpers\DateTimeHelper::get_gmt_to_user_timezone_date( $sale_to, 'M j, Y g:i A' );
-            } else {
-                // Fallback: Display as-is
-                $from_formatted = date( 'M j, Y g:i A', $from_timestamp );
-                $to_formatted = date( 'M j, Y g:i A', $to_timestamp );
-            }
-
-            if ( $sale_status === 'scheduled' ) {
-                $schedule_text = sprintf( 
-                    __( 'Scheduled: %s to %s', 'tutorpress-pmpro' ), 
-                    $from_formatted, 
-                    $to_formatted 
-                );
-            } else {
-                $schedule_text = sprintf( 
-                    __( 'Active from %s to %s', 'tutorpress-pmpro' ), 
-                    $from_formatted, 
-                    $to_formatted 
-                );
-            }
-        } else {
-            $schedule_text = __( 'Open-ended (no expiration)', 'tutorpress-pmpro' );
-        }
-
-        $sale_price_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( floatval( $sale_price ) ) : '$' . number_format( floatval( $sale_price ), 2 );
-        $regular_price_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( $regular_price ) : '$' . number_format( $regular_price, 2 );
-
-        $course_title = get_the_title( $course_id );
-        $course_edit_url = admin_url( 'post.php?post=' . $course_id . '&action=edit' );
-        
-        // Different styling for scheduled vs active sales
-        $bg_color = ( $sale_status === 'scheduled' ) ? '#fff3cd' : '#d7f1ff';
-        $border_color = ( $sale_status === 'scheduled' ) ? '#ffc107' : '#0073aa';
-        $heading_color = ( $sale_status === 'scheduled' ) ? '#856404' : '#0073aa';
-        $heading_text = ( $sale_status === 'scheduled' ) ? __( 'Scheduled Sale', 'tutorpress-pmpro' ) : __( 'Sale Price Active', 'tutorpress-pmpro' );
-        $icon = ( $sale_status === 'scheduled' ) ? 'clock' : 'tag';
-        
-        ?>
-        <div class="pmpro_sale_price_notice" style="background: <?php echo esc_attr( $bg_color ); ?>; border-left: 4px solid <?php echo esc_attr( $border_color ); ?>; padding: 12px 15px; margin-top: 20px;">
-            <h3 style="margin-top: 0; color: <?php echo esc_attr( $heading_color ); ?>;">
-                <span class="dashicons dashicons-<?php echo esc_attr( $icon ); ?>" style="font-size: 20px; vertical-align: middle;"></span>
-                <?php echo esc_html( $heading_text ); ?>
-            </h3>
-            <p style="margin: 8px 0;">
-                <strong><?php esc_html_e( 'Regular Price:', 'tutorpress-pmpro' ); ?></strong> 
-                <span style="text-decoration: line-through; opacity: 0.6;"><?php echo esc_html( $regular_price_formatted ); ?></span>
-                &nbsp;&nbsp;
-                <strong><?php esc_html_e( 'Sale Price:', 'tutorpress-pmpro' ); ?></strong> 
-                <span style="color: <?php echo esc_attr( $heading_color ); ?>; font-weight: bold;"><?php echo esc_html( $sale_price_formatted ); ?></span>
-            </p>
-            <?php if ( $schedule_text ) : ?>
-                <p style="margin: 8px 0;">
-                    <strong><?php esc_html_e( 'Schedule:', 'tutorpress-pmpro' ); ?></strong> 
-                    <?php echo esc_html( $schedule_text ); ?>
-                </p>
-            <?php endif; ?>
-            <p style="margin: 8px 0; font-style: italic; color: #666;">
-                <?php 
-                printf(
-                    __( 'This sale is managed in the associated course: %s', 'tutorpress-pmpro' ),
-                    '<a href="' . esc_url( $course_edit_url ) . '" target="_blank">' . esc_html( $course_title ) . '</a>'
-                );
-                ?>
-            </p>
-            <p style="margin: 8px 0 0 0; font-size: 12px; color: #666;">
-                <strong><?php esc_html_e( 'Note:', 'tutorpress-pmpro' ); ?></strong>
-                <?php 
-                if ( $sale_status === 'scheduled' ) {
-                    esc_html_e( 'The sale price will automatically apply when the scheduled time begins. Until then, customers will be charged the regular price.', 'tutorpress-pmpro' );
-                } else {
-                    esc_html_e( 'The Initial Payment field above shows the regular price. Customers will automatically be charged the sale price at checkout.', 'tutorpress-pmpro' );
-                }
-                ?>
-            </p>
-        </div>
-        <?php
-    }
+	 * [REMOVED - Phase 9, Substep 3]
+	 * display_course_association_notice() → Moved to Admin\Admin_Notices::display_course_association_notice()
+	 *
+	 * [REMOVED - Phase 9, Substep 3]
+	 * display_sale_price_notice_on_level_edit() → Moved to Admin\Admin_Notices::display_sale_price_notice_on_level_edit()
+	 */
 }
 
 
