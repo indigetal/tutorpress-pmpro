@@ -69,6 +69,9 @@ class PMPro_Earnings_Handler {
 		// Cancellations/Refunds.
 		add_action( 'pmpro_updated_order', array( $this, 'handle_order_status_change' ), 10, 2 );
 
+		// Admin utility: Cleanup orphaned earnings (testing/debugging).
+		add_action( 'admin_action_tpp_cleanup_orphaned_earnings', array( $this, 'admin_cleanup_orphaned_earnings' ) );
+
 		// Ensure Tutor Core can find course_id for PMPro subscription orders during earnings calculation.
 		// For subscription orders, Tutor Core uses these filters to determine the course_id.
 		add_filter( 'tutor_subscription_course_by_plan', array( $this, 'filter_subscription_course_by_plan' ), 10, 2 );
@@ -291,6 +294,108 @@ class PMPro_Earnings_Handler {
 				$morder->id
 			) );
 		}
+	}
+
+	/**
+	 * Find orphaned earnings
+	 *
+	 * Returns earnings records that reference PMPro orders that no longer exist.
+	 * This can happen when orders are hard-deleted from the database (e.g., during testing).
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return array Array of orphaned Tutor order IDs.
+	 */
+	public function find_orphaned_earnings() {
+		global $wpdb;
+
+		$query = "
+			SELECT DISTINCT e.order_id
+			FROM {$wpdb->prefix}tutor_earnings e
+			INNER JOIN {$wpdb->prefix}tutor_ordermeta om 
+				ON e.order_id = om.order_id 
+				AND om.meta_key = 'pmpro_order_id'
+			WHERE NOT EXISTS (
+				SELECT 1 
+				FROM {$wpdb->prefix}pmpro_membership_orders pmo
+				WHERE pmo.id = om.meta_value
+			)
+		";
+
+		return $wpdb->get_col( $query );
+	}
+
+	/**
+	 * Clean up orphaned earnings
+	 *
+	 * Deletes earnings records for PMPro orders that no longer exist.
+	 * Uses the same deletion logic as handle_refund_or_cancellation().
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return array Results with counts.
+	 */
+	public function cleanup_orphaned_earnings() {
+		$orphaned_order_ids = $this->find_orphaned_earnings();
+
+		if ( empty( $orphaned_order_ids ) ) {
+			return array(
+				'deleted' => 0,
+				'message' => 'No orphaned earnings found.',
+			);
+		}
+
+		// Delete earnings for each orphaned Tutor order (reuses existing logic).
+		$earnings = Earnings::get_instance();
+		$deleted = 0;
+		foreach ( $orphaned_order_ids as $tutor_order_id ) {
+			$earnings->delete_earning_by_order( $tutor_order_id );
+			$deleted++;
+			error_log( sprintf(
+				'[TP-PMPRO Earnings] Deleted orphaned earnings for Tutor order #%d (PMPro order no longer exists)',
+				$tutor_order_id
+			) );
+		}
+
+		return array(
+			'deleted' => $deleted,
+			'message' => sprintf( 'Deleted %d orphaned earning record(s).', $deleted ),
+		);
+	}
+
+	/**
+	 * Admin action: Cleanup orphaned earnings
+	 *
+	 * Handles the admin action for manually triggering orphaned earnings cleanup.
+	 * Accessible via: wp-admin/admin.php?action=tpp_cleanup_orphaned_earnings
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public function admin_cleanup_orphaned_earnings() {
+		// Security checks.
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Unauthorized access.' );
+		}
+
+		check_admin_referer( 'tpp_cleanup_orphaned_earnings' );
+
+		// Perform cleanup.
+		$result = $this->cleanup_orphaned_earnings();
+
+		// Redirect back with result message.
+		$redirect = add_query_arg(
+			array(
+				'page'                => 'tutor-revenue-sharing',
+				'tpp_earnings_cleanup' => 'success',
+				'deleted'             => $result['deleted'],
+			),
+			admin_url( 'admin.php' )
+		);
+
+		wp_redirect( $redirect );
+		exit;
 	}
 
 	/**

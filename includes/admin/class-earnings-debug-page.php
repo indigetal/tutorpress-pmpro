@@ -1,0 +1,227 @@
+<?php
+/**
+ * Earnings Debug Page
+ *
+ * Admin page for testing and debugging earnings cleanup.
+ * Only available in development environments.
+ *
+ * @package TutorPress_PMPro
+ * @since 1.6.0
+ */
+
+namespace TUTORPRESS_PMPRO\Admin;
+
+use TUTORPRESS_PMPRO\PMPro_Earnings_Handler;
+
+// Exit if accessed directly.
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Earnings_Debug_Page Class
+ *
+ * @since 1.6.0
+ */
+class Earnings_Debug_Page {
+
+	/**
+	 * Initialize the debug page
+	 *
+	 * @since 1.6.0
+	 */
+	public static function init() {
+		// Add tab to Tutor LMS Tools page.
+		add_filter( 'tutor_tool_pages', array( __CLASS__, 'add_tools_tab' ), 10, 1 );
+		
+		// Handle cleanup action.
+		add_action( 'admin_post_tpp_cleanup_orphaned', array( __CLASS__, 'handle_cleanup_orphaned' ) );
+	}
+
+	/**
+	 * Add Earnings Debug tab to Tutor Tools page
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param array $attr_tools Existing tools tabs.
+	 * @return array Modified tools tabs.
+	 */
+	public static function add_tools_tab( $attr_tools ) {
+		$attr_tools['earnings_debug'] = array(
+			'label'     => __( 'Earnings Debug', 'tutorpress-pmpro' ),
+			'slug'      => 'earnings_debug',
+			'desc'      => __( 'Debug and maintain revenue sharing earnings data', 'tutorpress-pmpro' ),
+			'template'  => 'earnings-debug',
+			'view_path' => TUTORPRESS_PMPRO_DIR . 'views/tools/',
+			'icon'      => 'tutor-icon-dollar',
+			'blocks'    => array(),
+		);
+
+		return $attr_tools;
+	}
+
+	/**
+	 * Get earnings statistics
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return array Statistics array.
+	 */
+	public static function get_earnings_stats() {
+		global $wpdb;
+		$handler = PMPro_Earnings_Handler::get_instance();
+
+		$total_earnings = $wpdb->get_var(
+			"SELECT COUNT(*) FROM {$wpdb->prefix}tutor_earnings"
+		);
+
+		$orphaned_count = count( $handler->find_orphaned_earnings() );
+
+		$valid_earnings = $wpdb->get_var(
+			"SELECT COUNT(DISTINCT e.order_id)
+			 FROM {$wpdb->prefix}tutor_earnings e
+			 INNER JOIN {$wpdb->prefix}tutor_ordermeta om 
+			 	ON e.order_id = om.order_id 
+			 	AND om.meta_key = 'pmpro_order_id'
+			 INNER JOIN {$wpdb->prefix}pmpro_membership_orders pmo
+			 	ON pmo.id = om.meta_value
+			 WHERE pmo.status = 'success'"
+		);
+
+		return array(
+			'total'    => $total_earnings,
+			'valid'    => $valid_earnings,
+			'orphaned' => $orphaned_count,
+		);
+	}
+
+	/**
+	 * Render detailed earnings report
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public static function render_earnings_report() {
+		global $wpdb;
+
+		$query = "
+			SELECT 
+				e.earning_id,
+				e.order_id as tutor_order_id,
+				e.instructor_amount,
+				e.admin_amount,
+				e.course_price_total,
+				om.meta_value as pmpro_order_id,
+				pmo.id as actual_pmpro_id,
+				pmo.total as pmpro_total,
+				pmo.status as pmpro_status,
+				CASE 
+					WHEN pmo.id IS NULL THEN 'ORPHANED'
+					WHEN pmo.status != 'success' THEN 'INVALID'
+					ELSE 'VALID'
+				END as earning_status,
+				e.created_at
+			FROM {$wpdb->prefix}tutor_earnings e
+			INNER JOIN {$wpdb->prefix}tutor_ordermeta om 
+				ON e.order_id = om.order_id 
+				AND om.meta_key = 'pmpro_order_id'
+			LEFT JOIN {$wpdb->prefix}pmpro_membership_orders pmo 
+				ON pmo.id = om.meta_value
+			ORDER BY e.created_at DESC
+			LIMIT 50
+		";
+
+		$results = $wpdb->get_results( $query );
+
+		if ( empty( $results ) ) {
+			echo '<p>No earnings records found.</p>';
+			return;
+		}
+
+		?>
+		<table class="wp-list-table widefat fixed striped">
+			<thead>
+				<tr>
+					<th>Earning ID</th>
+					<th>Tutor Order</th>
+					<th>PMPro Order</th>
+					<th>Instructor</th>
+					<th>Admin</th>
+					<th>Status</th>
+					<th>Created</th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php foreach ( $results as $row ) : ?>
+					<tr>
+						<td><?php echo esc_html( $row->earning_id ); ?></td>
+						<td>#<?php echo esc_html( $row->tutor_order_id ); ?></td>
+						<td>
+							<?php if ( $row->actual_pmpro_id ) : ?>
+								#<?php echo esc_html( $row->actual_pmpro_id ); ?>
+							<?php else : ?>
+								<span style="color: #999;">
+									#<?php echo esc_html( $row->pmpro_order_id ); ?> (deleted)
+								</span>
+							<?php endif; ?>
+						</td>
+						<td>$<?php echo esc_html( number_format( $row->instructor_amount, 2 ) ); ?></td>
+						<td>$<?php echo esc_html( number_format( $row->admin_amount, 2 ) ); ?></td>
+						<td>
+							<?php if ( $row->earning_status === 'VALID' ) : ?>
+								<span class="dashicons dashicons-yes-alt" style="color: green;"></span> Valid
+							<?php elseif ( $row->earning_status === 'ORPHANED' ) : ?>
+								<span class="dashicons dashicons-warning" style="color: red;"></span> Orphaned
+							<?php else : ?>
+								<span class="dashicons dashicons-dismiss" style="color: orange;"></span> Invalid
+							<?php endif; ?>
+						</td>
+						<td><?php echo esc_html( $row->created_at ); ?></td>
+					</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
+		<p class="description" style="margin-top: 10px;">Showing up to 50 most recent earnings records.</p>
+		<?php
+	}
+
+	/**
+	 * Handle cleanup orphaned action
+	 *
+	 * @since 1.6.0
+	 */
+	public static function handle_cleanup_orphaned() {
+		// Verify nonce.
+		if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'tpp_cleanup_orphaned' ) ) {
+			wp_die( esc_html__( 'Security check failed.', 'tutorpress-pmpro' ) );
+		}
+
+		// Verify capability.
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have sufficient permissions to access this page.', 'tutorpress-pmpro' ) );
+		}
+
+		// Perform cleanup.
+		$handler = PMPro_Earnings_Handler::get_instance();
+		$result = $handler->cleanup_orphaned_earnings();
+
+		// Redirect back with success message.
+		$redirect = add_query_arg(
+			array(
+				'page'     => 'tutor_tools',
+				'sub_page' => 'earnings_debug',
+				'result'   => 'cleanup_success',
+				'deleted'  => $result['deleted'],
+			),
+			admin_url( 'admin.php' )
+		);
+
+		wp_safe_redirect( $redirect );
+		exit;
+	}
+}
+
+// Initialize the debug page.
+Earnings_Debug_Page::init();
+

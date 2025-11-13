@@ -1,6 +1,6 @@
 <?php
 /**
- * PM PRO pricing view
+ * PMPRo pricing view
  *
  * @package TutorPro\Addons
  * @subpackage PmPro\Views
@@ -104,7 +104,7 @@
 									$billing_text .= '<span class="tutor-fw-bold">';
 										'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
 											$billing_text .= $display_initial;
-										'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
+							'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 									$billing_text .= '</span>';
 									
 									// Show recurring amount in parentheses
