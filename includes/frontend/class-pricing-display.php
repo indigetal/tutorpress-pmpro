@@ -31,7 +31,7 @@ class Pricing_Display {
 	/**
 	 * Reference to PaidMembershipsPro for utility methods.
 	 *
-	 * Used to call methods not yet extracted (is_pmpro_enabled, is_enrolled_by_pmpro_membership, etc.)
+	 * Used to call methods not yet extracted (is_pmpro_enabled, etc.)
 	 * Will be removed as we continue extracting methods in future phases.
 	 *
 	 * @since 1.0.0
@@ -48,17 +48,27 @@ class Pricing_Display {
 	private $sale_price_handler;
 
 	/**
+	 * Enrollment handler service instance.
+	 *
+	 * @since 1.0.0
+	 * @var \TUTORPRESS_PMPRO\Enrollment\Enrollment_Handler
+	 */
+	private $enrollment_handler;
+
+	/**
 	 * Constructor.
 	 *
 	 * @since 1.0.0
-	 * @param \TUTORPRESS_PMPRO\Access\Access_Checker       $access_checker      Access checker instance.
-	 * @param \TUTORPRESS_PMPRO\PaidMembershipsPro           $pmpro               PaidMembershipsPro instance.
-	 * @param \TUTORPRESS_PMPRO\Pricing\Sale_Price_Handler  $sale_price_handler  Sale price handler instance.
+	 * @param \TUTORPRESS_PMPRO\Access\Access_Checker          $access_checker      Access checker instance.
+	 * @param \TUTORPRESS_PMPRO\PaidMembershipsPro              $pmpro               PaidMembershipsPro instance.
+	 * @param \TUTORPRESS_PMPRO\Pricing\Sale_Price_Handler     $sale_price_handler  Sale price handler instance.
+	 * @param \TUTORPRESS_PMPRO\Enrollment\Enrollment_Handler  $enrollment_handler  Enrollment handler instance.
 	 */
-	public function __construct( $access_checker, $pmpro, $sale_price_handler ) {
+	public function __construct( $access_checker, $pmpro, $sale_price_handler, $enrollment_handler ) {
 		$this->access_checker      = $access_checker;
 		$this->pmpro               = $pmpro;
 		$this->sale_price_handler  = $sale_price_handler;
+		$this->enrollment_handler  = $enrollment_handler;
 	}
 
 	/**
@@ -68,15 +78,36 @@ class Pricing_Display {
 	 * @return void
 	 */
 	public function register_hooks() {
-		// Course loop/archive pricing (Substep 1)
+		// Course loop/archive pricing
 		add_filter( 'get_tutor_course_price', array( $this, 'filter_get_tutor_course_price' ), 12, 2 );
 		add_filter( 'tutor_course_loop_price', array( $this, 'filter_course_loop_price_pmpro' ), 12, 2 );
-		add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 10, 1 );
+		add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
 		
-		// Single course pricing (Substep 2)
+		// Single course pricing
 		add_filter( 'tutor/course/single/entry-box/free', array( $this, 'pmpro_pricing' ), 10, 2 );
 		add_filter( 'tutor/course/single/entry-box/is_enrolled', array( $this, 'pmpro_pricing' ), 10, 2 );
 		add_action( 'tutor/course/single/content/before/all', array( $this, 'pmpro_pricing_single_course' ), 100, 2 );
+		
+		// Additional pricing filters
+		add_filter( 'tutor_course/single/add-to-cart', array( $this, 'tutor_course_add_to_cart' ) );
+		add_filter( 'tutor_course_price', array( $this, 'tutor_course_price' ) );
+		add_filter( 'tutor-loop-default-price', array( $this, 'add_membership_required' ) );
+		add_filter( 'tutor_course_expire_validity', array( $this, 'filter_expire_time' ), 99, 2 );
+		
+		// Frontend styles
+		add_action( 'wp_enqueue_scripts', array( $this, 'pricing_style' ) );
+	}
+
+	/**
+	 * Enqueue frontend pricing styles for single course pages.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function pricing_style() {
+		if ( function_exists( 'is_single_course' ) && is_single_course() ) {
+			wp_enqueue_style( 'tutorpress-pmpro-pricing', TUTORPRESS_PMPRO()->url . 'assets/css/pricing.css', array(), TUTORPRESS_PMPRO_VERSION );
+		}
 	}
 
 	/**
@@ -132,10 +163,10 @@ class Pricing_Display {
 				return $html;
 			}
 
-			// Keep enrollment display if user purchased this course individually (not via membership)
-			if ( tutor_utils()->is_enrolled( $course_id ) && ! $this->pmpro->is_enrolled_by_pmpro_membership( $course_id ) ) {
-				return $html;
-			}
+		// Keep enrollment display if user purchased this course individually (not via membership)
+		if ( tutor_utils()->is_enrolled( $course_id ) && ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id ) ) {
+			return $html;
+		}
 
 			// For all other cases in membership-only mode, show "View Pricing" button
 			// This includes: logged-out users, users without membership, users without access
@@ -765,5 +796,134 @@ class Pricing_Display {
 		ob_start();
 		include dirname( __DIR__, 2 ) . '/views/pmpro-pricing.php';
 		return ob_get_clean();
+	}
+
+	/**
+	 * Filter to show "Free" for courses when user has access via membership.
+	 *
+	 * Applies to loop default price display when monetization is set to PMPro.
+	 *
+	 * @since 1.0.0
+	 * @param string $price The default price text.
+	 * @return string Empty if no access, "Free" if user has membership access.
+	 */
+	public function add_membership_required( $price ) {
+		return ! ( $this->access_checker->has_course_access( get_the_ID() ) === true ) ? '' : __( 'Free', 'pmpro-tutorlms' );
+	}
+
+	/**
+	 * Filter add-to-cart HTML to show appropriate message based on membership access.
+	 *
+	 * If user has membership access, show default HTML. Otherwise, apply custom
+	 * enrollment message filter.
+	 *
+	 * @since 1.0.0
+	 * @param string $html The add-to-cart HTML.
+	 * @return string Modified HTML based on access.
+	 */
+	public function tutor_course_add_to_cart( $html ) {
+		$access_require = $this->access_checker->has_course_access( get_the_ID() );
+		if ( true === $access_require ) {
+			// If has membership access, then no need membership require message.
+			return $html;
+		}
+
+		return apply_filters( 'tutor_enrol_no_membership_msg', '' );
+	}
+
+	/**
+	 * Filter course price HTML when monetization is set to PMPro.
+	 *
+	 * Returns empty string to hide default Tutor price display when using PMPro.
+	 *
+	 * @since 1.0.0
+	 * @param string $html The course price HTML.
+	 * @return string Empty string if PMPro monetization, original HTML otherwise.
+	 */
+	public function tutor_course_price( $html ) {
+		return 'pmpro' === get_tutor_option( 'monetize_by' ) ? '' : $html;
+	}
+
+	/**
+	 * Filter course expiration validity text based on membership level.
+	 *
+	 * Replaces default Tutor validity with membership-based expiration periods.
+	 * Shows "Membership Wise" for non-enrolled users, or the actual level's
+	 * expiration/cycle period for enrolled users.
+	 *
+	 * @since 1.0.0
+	 * @param string $validity   The default validity text.
+	 * @param int    $course_id  The course ID.
+	 * @return string Modified validity text based on membership.
+	 */
+	public function filter_expire_time( $validity, $course_id ) {
+		$monetize_by = tutor_utils()->get_option( 'monetize_by' );
+		if ( 'pmpro' !== $monetize_by ) {
+			return $validity;
+		}
+		$user_id = get_current_user_id();
+
+		/**
+		 * The has_course_access method returns true if user has course
+		 * access, if not then returns array of required levels
+		 */
+		$has_access  = $this->access_checker->has_course_access( $course_id );
+		$user_levels = pmpro_getMembershipLevelsForUser( $user_id );
+		$is_enrolled = tutor_utils()->is_enrolled( $course_id, $user_id );
+
+		if ( false === $is_enrolled ) {
+			// If course has levels or user has access via membership
+			if ( is_array( $has_access ) && count( $has_access ) ) {
+				$validity = __( 'Membership Wise', 'tutorpress-pmpro' );
+			}
+			// User not enrolled but just paid and will enroll
+			if ( true === $has_access ) {
+				$validity = __( 'Membership Wise', 'tutorpress-pmpro' );
+			}
+		} else {
+			// User is enrolled - check their membership level's expiration
+			$required_levels = is_array( $has_access ) ? $has_access : array();
+			$user_has_level  = null;
+
+			// Check if user has a specific level for this course
+			if ( is_array( $required_levels ) && count( $required_levels ) ) {
+				foreach ( $required_levels as $key => $req_level ) {
+					$level_id = $req_level->id ?? 0;
+					if ( is_array( $user_levels ) && count( $user_levels ) && isset( $user_levels[ $key ] ) && $user_levels[ $key ]->id === $level_id ) {
+						$user_has_level = $user_levels[ $key ];
+					}
+				}
+			}
+
+			// If user has a matching level, use its expiration
+			if ( ! is_null( $user_has_level ) && is_object( $user_has_level ) ) {
+				if ( $user_has_level->expiration_number ) {
+					$validity = $user_has_level->expiration_number . ' ' . $user_has_level->expiration_period;
+				} else {
+					$validity = $user_has_level->cycle_number . ' ' . $user_has_level->cycle_period;
+				}
+			}
+
+			/**
+			 * If user doesn't have category-wise membership,
+			 * look into full-site membership
+			 */
+			if ( is_array( $user_levels ) && is_null( $user_has_level ) ) {
+				$level = isset( $user_levels[0] ) ? $user_levels[0] : null;
+				if ( is_object( $level ) ) {
+					if ( isset( $level->expiration_period ) && $level->expiration_period ) {
+						$validity = $level->expiration_number . ' ' . $level->expiration_period;
+					} else {
+						$validity = $level->cycle_number . ' ' . $level->cycle_period;
+					}
+				}
+			}
+		}
+
+		// If membership has no validity then set lifetime
+		if ( 0 == $validity || '' === $validity ) {
+			$validity = __( 'Lifetime', 'tutorpress-pmpro' );
+		}
+		return $validity;
 	}
 }
