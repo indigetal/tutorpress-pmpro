@@ -774,7 +774,7 @@ if ( ! defined( 'ABSPATH' ) ) {
         if ( ! empty( $stale_ids ) ) {
             // Ensure cleanup class is available
             if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-                require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+                require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
             }
             foreach ( $stale_ids as $sid ) {
                 // Use full_delete_level for stale ids so we also remove any lingering
@@ -833,7 +833,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				foreach ( $pending as $plan_params ) {
 					try {
 						// Map to PMPro level data and create level now that we're published
-						require_once $this->path . 'includes/class-pmpro-mapper.php';
+						require_once $this->path . 'includes/utilities/class-pmpro-mapper.php';
 						$mapper = new \TutorPress_PMPro_Mapper();
 						$level_data = $mapper->map_ui_to_pmpro( (array) $plan_params );
 						$db_data = $level_data;
@@ -853,7 +853,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 							}
 							// ✅ KEY INSIGHT: Always ensure association row exists
 							if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
-								require_once $this->path . 'includes/class-pmpro-association.php';
+								require_once $this->path . 'includes/utilities/class-pmpro-association.php';
 							}
 							\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 							
@@ -928,7 +928,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		
 		if ( ! empty( $ids ) ) {
 			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+				require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
 			}
 			foreach ( $ids as $lid ) {
 				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
@@ -960,7 +960,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+			require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
 		}
 		foreach ( $one_time as $lid ) {
 			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
@@ -987,7 +987,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Step 1: Delete all recurring levels
 		if ( ! empty( $recurring ) ) {
 			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+				require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
 			}
 			foreach ( $recurring as $rid ) {
 				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $rid, true );
@@ -1052,7 +1052,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				$this->log( '[TP-PMPRO] handle_one_time_branch set_reverse_meta level_id=' . $level_id . ' course=' . $course_id );
 			}
 			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
-				require_once $this->path . 'includes/class-pmpro-association.php';
+				require_once $this->path . 'includes/utilities/class-pmpro-association.php';
 			}
 			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 			$this->log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' course=' . $course_id );
@@ -1223,7 +1223,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		
 		if ( ! empty( $ids ) ) {
 			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-				require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+				require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
 			}
 			foreach ( $ids as $lid ) {
 				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
@@ -1291,7 +1291,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 					}
 					// Ensure association
 					if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
-						require_once $this->path . 'includes/class-pmpro-association.php';
+						require_once $this->path . 'includes/utilities/class-pmpro-association.php';
 					}
 					\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 					
@@ -1379,7 +1379,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		// Ensure cleanup class is available
 		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-			require_once $this->path . 'includes/class-pmpro-level-cleanup.php';
+			require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
 		}
 
 		foreach ( $level_ids as $lid ) {
@@ -1506,7 +1506,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 
 		// Load the mapper to prepare the PMPro level data.
-		require_once $this->path . 'includes/class-pmpro-mapper.php';
+		require_once $this->path . 'includes/utilities/class-pmpro-mapper.php';
 		$mapper = new \TutorPress_PMPro_Mapper();
 
 		// Prepare UI-style payload for the mapper.

@@ -10,12 +10,12 @@
 defined( 'ABSPATH' ) || exit;
 
 // Load mapper helper (small, local helper)
-if ( file_exists( __DIR__ . '/../class-pmpro-mapper.php' ) ) {
-	require_once __DIR__ . '/../class-pmpro-mapper.php';
+if ( file_exists( __DIR__ . '/../utilities/class-pmpro-mapper.php' ) ) {
+	require_once __DIR__ . '/../utilities/class-pmpro-mapper.php';
 }
 // Association helper
-if ( file_exists( __DIR__ . '/../class-pmpro-association.php' ) ) {
-    require_once __DIR__ . '/../class-pmpro-association.php';
+if ( file_exists( __DIR__ . '/../utilities/class-pmpro-association.php' ) ) {
+    require_once __DIR__ . '/../utilities/class-pmpro-association.php';
 }
 
 class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controller {
