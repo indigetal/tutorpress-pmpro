@@ -93,36 +93,40 @@ class PaidMembershipsPro {
 	 * Register hooks
 	 */
     public function __construct() {
-        // Load access control service
+        // Load service classes (required before container can instantiate them)
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/access/interface-access-checker.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/access/class-access-checker.php';
-        $this->access_checker = new \TUTORPRESS_PMPRO\Access\Access_Checker();
-        
-        // Load pricing utilities (manually loaded for consistency)
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/pricing/class-pricing-manager.php';
-        
-        // Load sale price handler service
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/pricing/class-sale-price-handler.php';
-        $this->sale_price_handler = new \TUTORPRESS_PMPRO\Pricing\Sale_Price_Handler();
-        
-        // Load enrollment handler service
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/enrollment/class-enrollment-handler.php';
-        $this->enrollment_handler = new \TUTORPRESS_PMPRO\Enrollment\Enrollment_Handler( $this->access_checker );
-        
-        // Load frontend services
-        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pricing-display.php';
-        $this->pricing_display = new \TUTORPRESS_PMPRO\Frontend\Pricing_Display( $this->access_checker, $this, $this->sale_price_handler, $this->enrollment_handler );
-        
-        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrollment-ui.php';
-        $this->enrollment_ui = new \TUTORPRESS_PMPRO\Frontend\Enrollment_UI( $this->access_checker, $this->pricing_display );
-        
-        // Load admin level settings service
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/admin/class-level-settings.php';
-        $this->level_settings = new \TUTORPRESS_PMPRO\Admin\Level_Settings();
-        
-        // Load admin notices service
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/admin/class-admin-notices.php';
-        $this->admin_notices = new \TUTORPRESS_PMPRO\Admin\Admin_Notices();
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pricing-display.php';
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrollment-ui.php';
+        
+        // Load service container
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/class-service-container.php';
+        
+        // Initialize services via container
+        $this->access_checker      = Service_Container::get( 'access_checker' );
+        $this->sale_price_handler  = Service_Container::get( 'sale_price_handler' );
+        $this->enrollment_handler  = Service_Container::get( 'enrollment_handler' );
+        $this->level_settings      = Service_Container::get( 'level_settings' );
+        $this->admin_notices       = Service_Container::get( 'admin_notices' );
+        
+        // Initialize pricing_display (needs $this reference)
+        $this->pricing_display = new \TUTORPRESS_PMPRO\Frontend\Pricing_Display(
+            $this->access_checker,
+            $this,
+            $this->sale_price_handler,
+            $this->enrollment_handler
+        );
+        
+        // Initialize enrollment_ui (depends on pricing_display)
+        $this->enrollment_ui = new \TUTORPRESS_PMPRO\Frontend\Enrollment_UI(
+            $this->access_checker,
+            $this->pricing_display
+        );
         
         // Register PMPro admin settings hooks early (needed before wp hook)
         add_action( 'pmpro_membership_level_after_other_settings', array( $this->level_settings, 'display_courses_categories' ) );
