@@ -152,9 +152,9 @@ class PaidMembershipsPro {
      * 
      * Called on 'wp' hook to ensure all Tutor utilities are fully loaded.
      * Registers all pricing display and enrollment UI hooks.
-     *
-     * @return void
-     */
+	 *
+	 * @return void
+	 */
     public function init_pmpro_price_overrides() {
         // Guard: only run on frontend, not admin
         if ( is_admin() ) {
@@ -211,7 +211,7 @@ class PaidMembershipsPro {
             }
         }
         return false;
-    }
+	}
 
     /**
      * Wire the global tutor_membership_only_mode filter.

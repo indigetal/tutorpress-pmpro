@@ -3,7 +3,8 @@
  * Pricing Display
  *
  * Handles frontend pricing and enrollment UI display logic.
- * Manages course loop pricing, single course pricing, and membership plan displays.
+ * Manages course loop pricing, single course pricing, membership plan displays,
+ * and PMPro content restriction overrides for course pages.
  *
  * @package TutorPress_PMPro
  * @subpackage Frontend
@@ -16,7 +17,10 @@ namespace TUTORPRESS_PMPRO\Frontend;
  * Class Pricing_Display
  *
  * Service class responsible for displaying pricing information and enrollment UI
- * on the frontend. Extracted from PaidMembershipsPro class to follow Single Responsibility Principle.
+ * on the frontend. Also handles PMPro content filter overrides to ensure students
+ * can see course details, pricing, and enrollment options on course single pages.
+ * 
+ * Extracted from PaidMembershipsPro class to follow Single Responsibility Principle.
  */
 class Pricing_Display {
 
@@ -96,6 +100,9 @@ class Pricing_Display {
 		
 		// Frontend styles
 		add_action( 'wp_enqueue_scripts', array( $this, 'pricing_style' ) );
+		
+		// PMPro content restriction override (allow course pages to display full content)
+		add_filter( 'pmpro_membership_content_filter', array( $this, 'allow_course_page_content' ), 10, 3 );
 	}
 
 	/**
@@ -925,5 +932,39 @@ class Pricing_Display {
 			$validity = __( 'Lifetime', 'tutorpress-pmpro' );
 		}
 		return $validity;
+	}
+
+	/**
+	 * Override PMPro content restriction for course single pages only.
+	 *
+	 * Allows full course page content to display so students can see:
+	 * - Course description
+	 * - Pricing information
+	 * - Enrollment options
+	 *
+	 * Course content (lessons, quizzes, assignments) remains restricted.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param mixed  $content_filter Content filter override (false = use PMPro default).
+	 * @param string $content        Post content.
+	 * @param bool   $hasaccess      Whether user has membership access.
+	 * @return mixed Content filter override or false to let PMPro handle it.
+	 */
+	public function allow_course_page_content( $content_filter, $content, $hasaccess ) {
+		// Only override for course single pages
+		if ( ! function_exists( 'is_single_course' ) || ! is_single_course() ) {
+			return $content_filter; // Return false to let PMPro handle it
+		}
+
+		// Verify this is actually a course post type
+		global $post;
+		if ( empty( $post ) || get_post_type( $post->ID ) !== tutor()->course_post_type ) {
+			return $content_filter;
+		}
+
+		// For course pages, always return full content (bypass PMPro restriction)
+		// Course content (lessons/quizzes) will still be restricted because they're different post types
+		return $content;
 	}
 }
