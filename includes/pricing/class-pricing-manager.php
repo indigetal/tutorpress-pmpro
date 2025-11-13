@@ -1,22 +1,39 @@
 <?php
 /**
- * PMPro pricing formatter for Tutor LMS courses.
+ * Pricing Manager
+ *
+ * Handles price formatting and display for courses with PMPro integration.
+ * Provides static utility methods for resolving and formatting course prices.
+ *
+ * @package TutorPress_PMPro
+ * @subpackage Pricing
+ * @since 1.0.0
  */
 
-namespace TUTORPRESS_PMPRO;
+namespace TUTORPRESS_PMPRO\Pricing;
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-class PMPro_Pricing {
+/**
+ * Pricing Manager class.
+ *
+ * Static utility class for price formatting and display.
+ * Resolves course prices from associated PMPro membership levels.
+ *
+ * @since 1.0.0
+ */
+class Pricing_Manager {
 	/**
 	 * Return formatted price string for a course based on associated PMPro levels.
 	 * Returns null when PMPro is not the active monetization engine or when
 	 * course is public/free or no associated levels found.
 	 *
-	 * @param int $course_id
-	 * @return string|null
+	 * @since 1.0.0
+	 *
+	 * @param int $course_id Course post ID.
+	 * @return string|null Formatted price string or null.
 	 */
 	public static function get_formatted_price( $course_id ) {
 		$course_id = absint( $course_id );
@@ -96,8 +113,10 @@ class PMPro_Pricing {
 	/**
 	 * Get PMPro level IDs associated with a course via pmpro_memberships_pages.
 	 *
-	 * @param int $course_id
-	 * @return int[]
+	 * @since 1.0.0
+	 *
+	 * @param int $course_id Course post ID.
+	 * @return int[] Array of level IDs.
 	 */
 	private static function get_associated_level_ids( $course_id ) {
 		global $wpdb;
@@ -114,7 +133,8 @@ class PMPro_Pricing {
 	/**
 	 * Determine if PMPro is the active monetization engine.
 	 *
-	 * @return bool
+	 * @since 1.0.0
+	 * @return bool True if PMPro is enabled, false otherwise.
 	 */
 	private static function is_pmpro_enabled() {
 		$forced = apply_filters( 'tutorpress_pmpro_enabled', null );
@@ -133,8 +153,10 @@ class PMPro_Pricing {
 	/**
 	 * Check if course is public or marked free in Tutor.
 	 *
-	 * @param int $course_id
-	 * @return bool
+	 * @since 1.0.0
+	 *
+	 * @param int $course_id Course post ID.
+	 * @return bool True if public or free, false otherwise.
 	 */
 	private static function is_course_public_or_free( $course_id ) {
 		$is_public = get_post_meta( $course_id, '_tutor_is_public_course', true ) === 'yes';
@@ -143,11 +165,16 @@ class PMPro_Pricing {
 	}
 
 	/**
-	 * Minimal currency resolution compatible with PMPro.
+	 * Get PMPro currency settings.
 	 *
-	 * @return array [symbol, position]
+	 * Public utility method for retrieving currency symbol and position
+	 * from PMPro's global configuration. Used by frontend pricing display
+	 * and admin UI components.
+	 *
+	 * @since 1.0.0
+	 * @return array Associative array with 'currency_symbol' and 'currency_position' keys.
 	 */
-	private static function get_currency() {
+	public static function get_pmpro_currency() {
 		$symbol = '';
 		$position = 'left';
 		if ( function_exists( 'pmpro_getOption' ) ) {
@@ -157,9 +184,33 @@ class PMPro_Pricing {
 			$symbol   = ( is_array( $data ) && isset( $data['symbol'] ) ) ? $data['symbol'] : '';
 			$position = ( is_array( $data ) && isset( $data['position'] ) ) ? strtolower( $data['position'] ) : 'left';
 		}
-		return array( $symbol, $position );
+		return array( 
+			'currency_symbol'   => $symbol,
+			'currency_position' => $position
+		);
 	}
 
+	/**
+	 * Internal helper for get_currency() (backward compatibility).
+	 *
+	 * @since 1.0.0
+	 * @return array [symbol, position]
+	 */
+	private static function get_currency() {
+		$result = self::get_pmpro_currency();
+		return array( $result['currency_symbol'], $result['currency_position'] );
+	}
+
+	/**
+	 * Format price amount with currency symbol.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param float  $amount   Price amount.
+	 * @param string $symbol   Currency symbol.
+	 * @param string $position Currency position (left, left_space, right, right_space).
+	 * @return string Formatted price.
+	 */
 	private static function format_amount( $amount, $symbol, $position ) {
 		$amount = number_format_i18n( (float) $amount, 2 );
 		if ( $symbol ) {
@@ -174,10 +225,24 @@ class PMPro_Pricing {
 		return $symbol . $amount;
 	}
 
+	/**
+	 * Get "per" label for recurring pricing.
+	 *
+	 * @since 1.0.0
+	 * @return string Translated "per" label.
+	 */
 	private static function per_label() {
 		return __( 'per', 'tutorpress-pmpro' );
 	}
 
+	/**
+	 * Get translated period label.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $period Period string (day, week, month, year).
+	 * @return string Translated period label.
+	 */
 	private static function period_label( $period ) {
 		$period = strtolower( (string) $period );
 		switch ( $period ) {
@@ -194,11 +259,18 @@ class PMPro_Pricing {
 		}
 	}
 
+	/**
+	 * Log debug message if TP_PMPRO_LOG is enabled.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $message Log message.
+	 * @return void
+	 */
 	private static function log( $message ) {
 		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 			error_log( $message );
 		}
 	}
 }
-
 

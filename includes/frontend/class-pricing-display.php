@@ -40,15 +40,25 @@ class Pricing_Display {
 	private $pmpro;
 
 	/**
+	 * Sale price handler service instance.
+	 *
+	 * @since 1.0.0
+	 * @var \TUTORPRESS_PMPRO\Pricing\Sale_Price_Handler
+	 */
+	private $sale_price_handler;
+
+	/**
 	 * Constructor.
 	 *
 	 * @since 1.0.0
-	 * @param \TUTORPRESS_PMPRO\Access\Access_Checker    $access_checker Access checker instance.
-	 * @param \TUTORPRESS_PMPRO\PaidMembershipsPro        $pmpro          PaidMembershipsPro instance.
+	 * @param \TUTORPRESS_PMPRO\Access\Access_Checker       $access_checker      Access checker instance.
+	 * @param \TUTORPRESS_PMPRO\PaidMembershipsPro           $pmpro               PaidMembershipsPro instance.
+	 * @param \TUTORPRESS_PMPRO\Pricing\Sale_Price_Handler  $sale_price_handler  Sale price handler instance.
 	 */
-	public function __construct( $access_checker, $pmpro ) {
-		$this->access_checker = $access_checker;
-		$this->pmpro          = $pmpro;
+	public function __construct( $access_checker, $pmpro, $sale_price_handler ) {
+		$this->access_checker      = $access_checker;
+		$this->pmpro               = $pmpro;
+		$this->sale_price_handler  = $sale_price_handler;
 	}
 
 	/**
@@ -185,10 +195,12 @@ class Pricing_Display {
 			return $html;
 		}
 
-		// Resolve minimal price string
-		$price = class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Pricing' ) ? \TUTORPRESS_PMPRO\PMPro_Pricing::get_formatted_price( $course_id ) : '';
+		// Phase 10, Substep 1: Removed Pricing_Manager call here because the code below
+		// is more complete and includes sale price support via get_active_price_for_level().
+		// Pricing_Manager::get_formatted_price() doesn't support sale pricing.
+		$price = '';
 
-		// Fallback: derive price from mapped level data if resolver returned empty
+		// Derive price from mapped level data with sale support
 		if ( ! is_string( $price ) || $price === '' ) {
 			$amount_strings  = array();
 			$numeric_amounts = array();
@@ -229,11 +241,11 @@ class Pricing_Display {
 						continue;
 					}
 
-					// Step 3.4b: Use dynamic pricing for archive display with sale support
-					$active_price_data = $this->pmpro->get_active_price_for_level( (int) $lid );
-					$init              = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : ( isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0 );
-					$is_on_sale        = ! empty( $active_price_data['on_sale'] );
-					$regular_price     = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $init;
+				// Step 3.4b: Use dynamic pricing for archive display with sale support
+				$active_price_data = $this->sale_price_handler->get_active_price_for_level( (int) $lid );
+				$init              = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : ( isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0 );
+				$is_on_sale        = ! empty( $active_price_data['on_sale'] );
+				$regular_price     = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $init;
 
 					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 						error_log( '[TP-PMPRO] Level ID=' . $lid . ' init=' . $init . ' is_on_sale=' . ( $is_on_sale ? 'yes' : 'no' ) . ' regular=' . $regular_price );
@@ -457,11 +469,11 @@ class Pricing_Display {
 				continue;
 			}
 
-			// Use dynamic pricing helper (handles sale schedule)
-			$active_price_data = $this->pmpro->get_active_price_for_level( (int) $level_id );
-			$active_price      = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : (float) $level->initial_payment;
-			$is_on_sale        = ! empty( $active_price_data['on_sale'] );
-			$regular_price     = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $active_price;
+		// Use dynamic pricing helper (handles sale schedule)
+		$active_price_data = $this->sale_price_handler->get_active_price_for_level( (int) $level_id );
+		$active_price      = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : (float) $level->initial_payment;
+		$is_on_sale        = ! empty( $active_price_data['on_sale'] );
+		$regular_price     = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $active_price;
 
 			// Format price string
 			if ( $is_on_sale ) {
@@ -731,10 +743,10 @@ class Pricing_Display {
 		}
 
 		// Calculate active prices for all levels (Step 3.4b: Dynamic Pricing)
-		// This ensures frontend displays reflect real-time sale status with zero delay
-		foreach ( $required_levels as &$level ) {
-			// Get active price (accounts for sale schedule)
-			$active_price = $this->pmpro->get_active_price_for_level( $level->id );
+	// This ensures frontend displays reflect real-time sale status with zero delay
+	foreach ( $required_levels as &$level ) {
+		// Get active price (accounts for sale schedule)
+		$active_price = $this->sale_price_handler->get_active_price_for_level( $level->id );
 
 			// Attach active price data to level object for template use
 			$level->active_price          = $active_price['price'];

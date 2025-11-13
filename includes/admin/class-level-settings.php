@@ -399,22 +399,13 @@ class Level_Settings {
 	/**
 	 * Get PMPro currency settings.
 	 *
-	 * Helper method to retrieve currency symbol and position from PMPro.
+	 * Phase 10, Substep 1 (Refactored): Delegates to Pricing_Manager static utility.
 	 *
 	 * @since 1.0.0
 	 * @return array Associative array with 'currency_symbol' and 'currency_position' keys.
 	 */
 	private function get_pmpro_currency() {
-		global $pmpro_currencies, $pmpro_currency;
-		$current_currency = $pmpro_currency ? $pmpro_currency : '';
-		$currency         = 'USD' === $current_currency ?
-								array( 'symbol' => '$' ) :
-								( isset( $pmpro_currencies[ $current_currency ] ) ? $pmpro_currencies[ $current_currency ] : null );
-
-		$currency_symbol   = ( is_array( $currency ) && isset( $currency['symbol'] ) ) ? $currency['symbol'] : '';
-		$currency_position = ( is_array( $currency ) && isset( $currency['position'] ) ) ? strtolower( $currency['position'] ) : 'left';
-
-		return compact( 'currency_symbol', 'currency_position' );
+		return \TUTORPRESS_PMPRO\Pricing\Pricing_Manager::get_pmpro_currency();
 	}
 }
 

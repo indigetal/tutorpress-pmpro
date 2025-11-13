@@ -74,6 +74,14 @@ class PaidMembershipsPro {
     private $admin_notices;
 
     /**
+     * Sale price handler service instance.
+     *
+     * @since 1.0.0
+     * @var \TUTORPRESS_PMPRO\Pricing\Sale_Price_Handler
+     */
+    private $sale_price_handler;
+
+    /**
 	 * Register hooks
 	 */
     public function __construct() {
@@ -82,9 +90,16 @@ class PaidMembershipsPro {
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/access/class-access-checker.php';
         $this->access_checker = new \TUTORPRESS_PMPRO\Access\Access_Checker();
         
+        // Phase 10, Substep 1: Load pricing utilities (manually loaded for consistency)
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/pricing/class-pricing-manager.php';
+        
+        // Phase 10, Substep 2: Load sale price handler service
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/pricing/class-sale-price-handler.php';
+        $this->sale_price_handler = new \TUTORPRESS_PMPRO\Pricing\Sale_Price_Handler();
+        
         // Phase 8, Step 8.1: Load frontend services
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pricing-display.php';
-        $this->pricing_display = new \TUTORPRESS_PMPRO\Frontend\Pricing_Display( $this->access_checker, $this );
+        $this->pricing_display = new \TUTORPRESS_PMPRO\Frontend\Pricing_Display( $this->access_checker, $this, $this->sale_price_handler );
         
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrollment-ui.php';
         $this->enrollment_ui = new \TUTORPRESS_PMPRO\Frontend\Enrollment_UI( $this->access_checker, $this->pricing_display );
@@ -103,31 +118,13 @@ class PaidMembershipsPro {
         add_filter( 'tutor_course_price', array( $this, 'tutor_course_price' ) );
         add_filter( 'tutor-loop-default-price', array( $this, 'add_membership_required' ) );
 
-        // Phase 8, Step 8.1: Moved to Frontend services
-        // Pricing_Display:
-        //   - tutor/course/single/entry-box/free → pmpro_pricing
-        //   - tutor/course/single/entry-box/is_enrolled → pmpro_pricing
-        //   - tutor/course/single/content/before/all → pmpro_pricing_single_course
-        // Enrollment_UI:
-        //   - tutor/course/single/entry-box/purchasable → show_pmpro_membership_plans
-        //   - tutor_allow_guest_attempt_enrollment → filter_allow_guest_attempt_enrollment
-        //   - tutor_after_enrolled → handle_after_enrollment_completed
-
-        // Phase 9, Substep 1: Moved to Admin\Level_Settings service
-        // Level_Settings:
-        //   - pmpro_membership_level_after_other_settings → display_courses_categories
-        //   - pmpro_save_membership_level → pmpro_settings
-        //   - tutor/options/attr → add_options
-        //   - manage_{course_post_type}_posts_columns → remove_price_column
-        //   - pmpro_membership_levels_table_extra_cols_header → level_category_list
-
 		if ( tutor_utils()->has_pmpro( true ) ) {
 			// Only wire PMPro behaviors when PMPro is the selected monetization engine (overridable via filter)
 			if ( ! $this->is_pmpro_enabled() ) {
 				return;
 			}
 
-            // Phase 9, Substep 2: Moved to Admin\Level_Settings service
+            // Moved to Admin\Level_Settings service
             // - pmpro_membership_levels_table_extra_cols_body → level_category_list_body
             // - pmpro_membership_levels_table → outstanding_cat_notice
             // - admin_enqueue_scripts → admin_script
@@ -146,20 +143,6 @@ class PaidMembershipsPro {
 
 			// Membership-Only Mode filter and helpers
 			$this->wire_membership_only_mode_filter();
-
-			// Phase 8, Step 8.1: Enrollment hooks moved to Enrollment_UI service
-			// - tutor_allow_guest_attempt_enrollment → filter_allow_guest_attempt_enrollment
-			// - tutor_after_enrolled → handle_after_enrollment_completed
-
-			// Step 3.4c: PMPro Critical Filter Hooks for Dynamic Pricing (Zero-Delay Architecture)
-			add_filter( 'pmpro_checkout_level', array( $this, 'filter_checkout_level_sale_price' ), 10, 1 ); // Changed priority to 10
-			add_filter( 'pmpro_level_cost_text', array( $this, 'filter_level_cost_text_sale_price' ), 999, 4 ); // Changed priority to 999 to run AFTER
-			add_filter( 'pmpro_email_data', array( $this, 'filter_email_data_sale_price' ), 10, 2 );
-			add_action( 'pmpro_invoice_bullets_bottom', array( $this, 'filter_invoice_sale_note' ), 10, 1 );
-			
-			// Phase 9, Substep 3: Moved to Admin\Admin_Notices service
-			// - pmpro_membership_level_after_general_information → display_course_association_notice
-			// - pmpro_membership_level_after_billing_details_settings → display_sale_price_notice_on_level_edit
         }
     }
 
@@ -191,32 +174,6 @@ class PaidMembershipsPro {
         $this->enrollment_ui->register_hooks();
 
     }
-
-    /**
-     * [REMOVED - Phase 8, Step 8.1: Substep 2]
-     * filter_get_tutor_course_price() → Moved to Pricing_Display::filter_get_tutor_course_price()
-     */
-
-    /**
-     * Ensure Tutor uses the 'tutor' price template wrappers in loops
-     * when the course has PMPro levels so our price string displays.
-     *
-     * @param string|null $sell_by
-     * @return string|null
-     */
-    /**
-     * [REMOVED - Phase 8, Step 8.1: Substep 1]
-     * 
-     * The following methods have been extracted to Pricing_Display service:
-     * - filter_course_sell_by() → Pricing_Display::filter_course_sell_by()
-     * - filter_course_loop_price_pmpro() → Pricing_Display::filter_course_loop_price_pmpro()
-     * - render_membership_price_button() → Pricing_Display::render_membership_price_button()
-     *
-     * All functionality preserved via delegation to Pricing_Display service.
-     */
-
-
-
 
     /**
     * On PMPro subscription expired, remove course access
@@ -282,28 +239,11 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * [REMOVED - Phase 9, Substep 1]
-	 * remove_price_column() → Moved to Admin\Level_Settings::remove_price_column()
-	 *
-	 * [REMOVED - Phase 9, Substep 1]
-	 * display_courses_categories() → Moved to Admin\Level_Settings::display_courses_categories()
-	 *
-	 * [REMOVED - Phase 9, Substep 1]
-	 * pmpro_settings() → Moved to Admin\Level_Settings::pmpro_settings()
-	 *
-	 * [REMOVED - Phase 9, Substep 1]
-	 * add_options() → Moved to Admin\Level_Settings::add_options()
-	 *
-	 * [REMOVED - Phase 9, Substep 1]
-	 * level_category_list() → Moved to Admin\Level_Settings::level_category_list()
-	 */
-
-    /**
 	 * Required levels
 	 *
 	 * Get required membership levels for given categories.
      *
-     * Phase 7, Step 7.3: Delegated to Access_Checker service.
+     * Delegated to Access_Checker service.
      *
      * @since 1.0.0
      * @param array $term_ids   Array of category term IDs.
@@ -317,7 +257,7 @@ class PaidMembershipsPro {
     /**
 	 * Check if any full-site membership levels exist.
      *
-     * Phase 7, Step 7.3: Delegated to Access_Checker service.
+     * Delegated to Access_Checker service.
 	 *
      * @since 1.0.0
 	 * @return bool True if full-site levels exist, false otherwise.
@@ -329,7 +269,7 @@ class PaidMembershipsPro {
     /**
      * Check if user has membership access to a course.
      *
-     * Phase 7, Step 7.3: Delegated to Access_Checker service.
+     * Delegated to Access_Checker service.
      *
      * This method checks three types of PMPro membership access:
      * 1. Full-site membership: Level with TUTORPRESS_PMPRO_membership_model = 'full_website_membership'
@@ -390,16 +330,6 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * [REMOVED - Phase 8, Step 8.1: Substep 2]
-	 * pmpro_pricing_single_course() → Moved to Pricing_Display::pmpro_pricing_single_course()
-	 */
-
-    /**
-	 * [REMOVED - Phase 8, Step 8.1: Substep 2]
-	 * pmpro_pricing() → Moved to Pricing_Display::pmpro_pricing()
-	 */
-
-    /**
 	 * Remove the price if Membership Plan activated
 	 *
 	 * @param string $html html.
@@ -411,20 +341,17 @@ class PaidMembershipsPro {
     }
 
     /**
-	 * [REMOVED - Phase 9, Substep 1]
-	 * level_category_list() → Moved to Admin\Level_Settings::level_category_list()
-	 */
-
-    /**
-	 * [REMOVED - Phase 9, Substep 2]
-	 * level_category_list_body() → Moved to Admin\Level_Settings::level_category_list_body()
+	 * Get PMPro currency settings.
 	 *
-	 * [REMOVED - Phase 9, Substep 2]
-	 * get_pmpro_currency() → Moved to Admin\Level_Settings::get_pmpro_currency() (private helper)
+	 * Phase 10, Substep 1 (Refactored): Delegates to Pricing_Manager static utility.
+	 * Kept as instance method for backward compatibility with existing code.
 	 *
-	 * [REMOVED - Phase 9, Substep 2]
-	 * outstanding_cat_notice() → Moved to Admin\Level_Settings::outstanding_cat_notice()
+	 * @since 1.0.0
+	 * @return array Associative array with 'currency_symbol' and 'currency_position' keys.
 	 */
+    public function get_pmpro_currency() {
+        return \TUTORPRESS_PMPRO\Pricing\Pricing_Manager::get_pmpro_currency();
+    }
 
     /**
 	 * Style enqueue
@@ -436,11 +363,6 @@ class PaidMembershipsPro {
             wp_enqueue_style( 'tutorpress-pmpro-pricing', TUTORPRESS_PMPRO()->url . 'assets/css/pricing.css', array(), TUTORPRESS_PMPRO_VERSION );
         }
     }
-
-    /**
-	 * [REMOVED - Phase 9, Substep 2]
-	 * admin_script() → Moved to Admin\Level_Settings::admin_script()
-	 */
 
     /**
 	 * Filter course expire time
@@ -1069,294 +991,4 @@ class PaidMembershipsPro {
         // This is a simplified check; could be enhanced to verify specific level access
         return pmpro_hasMembershipLevel();
     }
-
-    /**
-     * Render the "View Pricing" button for membership-only mode and membership selling option in course loops.
-     * 
-     * Displays a button linking to the individual course page where full pricing details are displayed.
-     *
-     * @since 1.4.0
-     * @param int $course_id Course ID to link to.
-     * @return string HTML for the pricing button.
-     */
-    /**
-     * [REMOVED - Phase 8, Step 8.1: Substep 1]
-     * render_membership_price_button() → Moved to Pricing_Display::render_membership_price_button()
-     */
-
-    /**
-     * [REMOVED - Phase 8, Step 8.1: Substep 3]
-     * filter_allow_guest_attempt_enrollment() → Moved to Pricing_Display::filter_allow_guest_attempt_enrollment()
-     */
-
-    /**
-     * [REMOVED - Phase 8, Step 8.1: Substep 3]
-     * handle_after_enrollment_completed() → Moved to Pricing_Display::handle_after_enrollment_completed()
-     * handle_bundle_course_membership_enrollment() → Moved to Pricing_Display::handle_bundle_course_membership_enrollment()
-     */
-
-    /**
-     * Get the active price for a PMPro level, accounting for sale schedule.
-     *
-     * Reads sale meta and calculates in real-time whether sale is active.
-     * Returns array with active price, regular price, and sale status.
-     *
-     * @since 1.5.0
-     * @param int $level_id PMPro level ID
-     * @return array {
-     *     Active price data
-     *
-     *     @type float      $price         Active price (sale or regular)
-     *     @type float|null $regular_price Regular price (if on sale) or null
-     *     @type bool       $on_sale       Whether sale is currently active
-     * }
-     */
-    public function get_active_price_for_level( $level_id ) {
-        global $wpdb;
-
-        // Get level data
-        $level = $wpdb->get_row( $wpdb->prepare(
-            "SELECT * FROM {$wpdb->pmpro_membership_levels} WHERE id = %d",
-            $level_id
-        ) );
-
-        if ( ! $level ) {
-            return array(
-                'price'         => 0.0,
-                'regular_price' => null,
-                'on_sale'       => false,
-            );
-        }
-
-        // Get sale meta (stored by REST controller and reconciliation logic)
-        $sale_price = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', true );
-        $regular_price_meta = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', true );
-
-        // Determine regular price (priority: regular_price_meta > level.initial_payment)
-        $regular = ! empty( $regular_price_meta )
-            ? floatval( $regular_price_meta )
-            : floatval( $level->initial_payment );
-
-        // Check if sale is active (uses helper method below)
-        if ( $this->is_sale_active( $level_id, $sale_price, $regular ) ) {
-            return array(
-                'price'         => floatval( $sale_price ),
-                'regular_price' => $regular,
-                'on_sale'       => true,
-            );
-        }
-
-        // No active sale
-        return array(
-            'price'         => $regular,
-            'regular_price' => null,
-            'on_sale'       => false,
-        );
-    }
-
-    /**
-     * Check if a sale is currently active for a level.
-     *
-     * Validates sale price and checks if current time is within sale schedule.
-     * Uses Tutor LMS DateTimeHelper for timezone consistency.
-     *
-     * @since 1.5.0
-     * @param int   $level_id      PMPro level ID
-     * @param mixed $sale_price    Sale price from meta
-     * @param float $regular_price Regular price for comparison
-     * @return bool True if sale is active, false otherwise
-     */
-    private function is_sale_active( $level_id, $sale_price, $regular_price ) {
-        // Validate sale price exists and is less than regular
-        if ( empty( $sale_price ) || floatval( $sale_price ) <= 0 || floatval( $sale_price ) >= $regular_price ) {
-            return false;
-        }
-
-        // Get sale schedule
-        $sale_from = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_from', true );
-        $sale_to = get_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price_to', true );
-
-        // If no schedule, sale is always active (open-ended sale)
-        if ( empty( $sale_from ) || empty( $sale_to ) ) {
-            return true;
-        }
-
-        // Check date range using Tutor LMS timezone helper (aligns with TutorPress)
-        if ( class_exists( '\Tutor\Helpers\DateTimeHelper' ) ) {
-            $now = \Tutor\Helpers\DateTimeHelper::now()->format( 'U' );
-            $from_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_from )->format( 'U' );
-            $to_timestamp = \Tutor\Helpers\DateTimeHelper::create( $sale_to )->format( 'U' );
-        } else {
-            // Fallback to WordPress core (GMT/UTC)
-            $now = current_time( 'timestamp', true );
-            $from_timestamp = strtotime( $sale_from );
-            $to_timestamp = strtotime( $sale_to );
-        }
-
-        return ( $now >= $from_timestamp && $now <= $to_timestamp );
-    }
-
-    /**
-     * Filter PMPro checkout level to apply sale price at checkout time.
-     *
-     * This ensures customers are charged the correct price based on
-     * real-time sale schedule, regardless of database initial_payment value.
-     *
-     * @since 1.5.0
-     * @param object $level PMPro level object
-     * @return object Modified level object
-     */
-    public function filter_checkout_level_sale_price( $level ) {
-        if ( empty( $level->id ) ) {
-            return $level;
-        }
-
-        $active_price = $this->get_active_price_for_level( $level->id );
-
-        if ( $active_price['on_sale'] ) {
-            $level->initial_payment = $active_price['price'];
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( sprintf(
-                    '[TP-PMPRO] checkout_sale_applied level_id=%d sale_price=%s regular_price=%s',
-                    $level->id,
-                    $active_price['price'],
-                    $active_price['regular_price']
-                ) );
-            }
-        }
-
-        return $level;
-    }
-
-    /**
-     * Filter PMPro level cost text to show sale price with strikethrough.
-     *
-     * Applies to PMPro's membership levels page, account page, and other
-     * locations where PMPro renders pricing.
-     *
-     * IMPORTANT: Sale only applies to initial payment, never to recurring price.
-     * This filter runs at priority 999 to ensure it runs AFTER checkout_level filter.
-     *
-     * @since 1.5.0
-     * @param string $text  Cost text HTML
-     * @param object $level PMPro level object
-     * @param array  $tags  Template tags
-     * @param bool   $short Whether to show short version
-     * @return string Modified cost text HTML
-     */
-    public function filter_level_cost_text_sale_price( $text, $level, $tags, $short ) {
-        if ( empty( $level->id ) ) {
-            return $text;
-        }
-
-        $active_price = $this->get_active_price_for_level( $level->id );
-
-        if ( ! $active_price['on_sale'] || ! function_exists( 'pmpro_formatPrice' ) ) {
-            return $text;
-        }
-
-        $sale_formatted = pmpro_formatPrice( $active_price['price'] );
-        $regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
-
-        // Check if this is a subscription (has recurring payments)
-        $is_subscription = ! empty( $level->billing_amount ) && ! empty( $level->cycle_number );
-
-        if ( $is_subscription ) {
-            // For subscriptions: Find where the sale price appears and add strikethrough regular price before it
-            // Two patterns:
-            // 1. Full format: "$20.00 now" → "~~$30.00~~ $20.00 now"
-            // 2. Short format: "$20.00 per Month" → "~~$30.00~~ $20.00 now and then $30.00 per Month"
-            
-            // Try full format first (with "now")
-            $pattern_full = '/' . preg_quote( $sale_formatted, '/' ) . '(\s+now)/i';
-            if ( preg_match( $pattern_full, $text ) ) {
-                $replacement = '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . $sale_formatted . '$1';
-                $text = preg_replace( $pattern_full, $replacement, $text, 1 );
-            } else {
-                // Short format - reconstruct the full text
-                // PMPro might show just "$20 per Month" (the recurring), but we need to show initial + recurring
-                $recurring_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( $level->billing_amount ) : '';
-                $cycle_text = '';
-                
-                if ( ! empty( $level->cycle_number ) && ! empty( $level->cycle_period ) ) {
-                    $cycle_text = ' per ' . $level->cycle_period;
-                }
-                
-                // Build: "~~$30~~ $20 now and then $30 per Month"
-                $text = '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . 
-                        $sale_formatted . ' now and then ' . $recurring_formatted . $cycle_text . '.';
-            }
-        } else {
-            // For one-time purchases: Replace regular price with strikethrough regular + sale
-            // PMPro shows the regular price from DB, we need to show it struck through + sale price
-            $text = str_replace(
-                $regular_formatted,
-                '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . $sale_formatted,
-                $text
-            );
-        }
-
-        return $text;
-    }
-
-    /**
-     * Filter PMPro email data to apply sale price in confirmation emails.
-     *
-     * @since 1.5.0
-     * @param array  $data  Email template data
-     * @param object $email PMPro email object
-     * @return array Modified email data
-     */
-    public function filter_email_data_sale_price( $data, $email ) {
-        // PMPro emails include membership level data
-        if ( ! empty( $data['membership_level'] ) && ! empty( $data['membership_level']->id ) ) {
-            $level_id = $data['membership_level']->id;
-            $active_price = $this->get_active_price_for_level( $level_id );
-
-            if ( $active_price['on_sale'] ) {
-                $data['membership_level']->initial_payment = $active_price['price'];
-
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( sprintf(
-                        '[TP-PMPRO] email_sale_applied level_id=%d sale_price=%s',
-                        $level_id,
-                        $active_price['price']
-                    ) );
-                }
-            }
-        }
-
-        return $data;
-    }
-
-    /**
-     * Add promotional price note to PMPro invoices when sale is active.
-     *
-     * @since 1.5.0
-     * @param object $order PMPro order object
-     * @return void
-     */
-    public function filter_invoice_sale_note( $order ) {
-        if ( empty( $order->membership_id ) ) {
-            return;
-        }
-
-        $active_price = $this->get_active_price_for_level( $order->membership_id );
-
-        if ( $active_price['on_sale'] && function_exists( 'pmpro_formatPrice' ) ) {
-            $regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
-            echo '<li><strong>' . esc_html__( 'Promotional Price Applied', 'tutorpress-pmpro' ) . '</strong> (' . esc_html__( 'Regular', 'tutorpress-pmpro' ) . ': ' . esc_html( $regular_formatted ) . ')</li>';
-        }
-    }
-
-    /**
-	 * [REMOVED - Phase 9, Substep 3]
-	 * display_course_association_notice() → Moved to Admin\Admin_Notices::display_course_association_notice()
-	 *
-	 * [REMOVED - Phase 9, Substep 3]
-	 * display_sale_price_notice_on_level_edit() → Moved to Admin\Admin_Notices::display_sale_price_notice_on_level_edit()
-	 */
 }
-
-
