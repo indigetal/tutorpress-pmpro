@@ -66,11 +66,17 @@ class PMPro_Earnings_Handler {
 		// Subscription renewal payments (fired by gateway webhooks/IPNs when renewals are processed).
 		add_action( 'pmpro_subscription_payment_completed', array( $this, 'handle_subscription_renewal' ), 10, 1 );
 
-		// Cancellations/Refunds.
+		// Cancellations/Refunds (status change).
 		add_action( 'pmpro_updated_order', array( $this, 'handle_order_status_change' ), 10, 2 );
+
+		// Order deletion (admin deletes order).
+		add_action( 'pmpro_delete_order', array( $this, 'handle_order_deletion' ), 10, 2 );
 
 		// Admin utility: Cleanup orphaned earnings (testing/debugging).
 		add_action( 'admin_action_tpp_cleanup_orphaned_earnings', array( $this, 'admin_cleanup_orphaned_earnings' ) );
+
+		// Scheduled task: Auto-cleanup orphaned earnings (detects hard-deleted PMPro orders).
+		add_action( 'tpp_auto_cleanup_orphaned_earnings', array( $this, 'scheduled_cleanup_orphaned_earnings' ) );
 
 		// Ensure Tutor Core can find course_id for PMPro subscription orders during earnings calculation.
 		// For subscription orders, Tutor Core uses these filters to determine the course_id.
@@ -80,6 +86,8 @@ class PMPro_Earnings_Handler {
 		// Fix: Intercept earnings calculation to correct zero amounts for PMPro subscriptions.
 		add_filter( 'tutor_pro_earning_calculator', array( $this, 'fix_subscription_earnings_calculation' ), 999, 1 );
 
+		// Schedule cleanup task if enabled.
+		$this->maybe_schedule_cleanup();
 	}
 
 	/**
@@ -259,9 +267,26 @@ class PMPro_Earnings_Handler {
 	}
 
 	/**
+	 * Handle order deletion
+	 *
+	 * Removes earnings and shadow orders when PMPro order is deleted via admin.
+	 * Fires on pmpro_delete_order hook when admin clicks "Delete" in PMPro orders list.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int    $pmpro_order_id PMPro order ID.
+	 * @param object $morder         PMPro order object.
+	 * @return void
+	 */
+	public function handle_order_deletion( $pmpro_order_id, $morder ) {
+		$this->cleanup_order_data( $pmpro_order_id, 'deleted' );
+	}
+
+	/**
 	 * Handle refunds and cancellations
 	 *
-	 * Removes earnings associated with the PMPro order.
+	 * Removes earnings and shadow orders associated with the PMPro order.
+	 * This ensures complete cleanup when orders are refunded or cancelled.
 	 *
 	 * @since 1.6.0
 	 *
@@ -269,6 +294,22 @@ class PMPro_Earnings_Handler {
 	 * @return void
 	 */
 	private function handle_refund_or_cancellation( $morder ) {
+		$this->cleanup_order_data( $morder->id, 'refunded/cancelled' );
+	}
+
+	/**
+	 * Clean up order data
+	 *
+	 * Shared cleanup logic for deletions, refunds, and cancellations.
+	 * Removes earnings and shadow Tutor orders.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int    $pmpro_order_id PMPro order ID.
+	 * @param string $reason         Reason for cleanup (for logging).
+	 * @return void
+	 */
+	private function cleanup_order_data( $pmpro_order_id, $reason = 'unknown' ) {
 		global $wpdb;
 
 		// Find associated Tutor order(s).
@@ -276,7 +317,7 @@ class PMPro_Earnings_Handler {
 			$wpdb->prepare(
 				"SELECT order_id FROM {$wpdb->prefix}tutor_ordermeta
 				 WHERE meta_key = 'pmpro_order_id' AND meta_value = %d",
-				$morder->id
+				$pmpro_order_id
 			)
 		);
 
@@ -284,14 +325,20 @@ class PMPro_Earnings_Handler {
 			return;
 		}
 
-		// Delete earnings for each associated Tutor order.
 		$earnings = Earnings::get_instance();
+
 		foreach ( $tutor_order_ids as $tutor_order_id ) {
+			// Delete earnings.
 			$earnings->delete_earning_by_order( $tutor_order_id );
+
+			// Delete shadow Tutor order and related data.
+			$this->delete_tutor_order( $tutor_order_id );
+
 			error_log( sprintf(
-				'[TP-PMPRO Earnings] Deleted earnings for Tutor order #%d (PMPro order #%d refunded/cancelled)',
+				'[TP-PMPRO Earnings] Deleted earnings and shadow order for Tutor order #%d (PMPro order #%d %s)',
 				$tutor_order_id,
-				$morder->id
+				$pmpro_order_id,
+				$reason
 			) );
 		}
 	}
@@ -328,8 +375,8 @@ class PMPro_Earnings_Handler {
 	/**
 	 * Clean up orphaned earnings
 	 *
-	 * Deletes earnings records for PMPro orders that no longer exist.
-	 * Uses the same deletion logic as handle_refund_or_cancellation().
+	 * Deletes earnings records and shadow orders for PMPro orders that no longer exist.
+	 * This comprehensive cleanup removes both earnings and the associated Tutor orders.
 	 *
 	 * @since 1.6.0
 	 *
@@ -345,22 +392,106 @@ class PMPro_Earnings_Handler {
 			);
 		}
 
-		// Delete earnings for each orphaned Tutor order (reuses existing logic).
 		$earnings = Earnings::get_instance();
 		$deleted = 0;
+
 		foreach ( $orphaned_order_ids as $tutor_order_id ) {
+			// Delete earnings.
 			$earnings->delete_earning_by_order( $tutor_order_id );
+
+			// Delete shadow Tutor order and related data.
+			$this->delete_tutor_order( $tutor_order_id );
+
 			$deleted++;
 			error_log( sprintf(
-				'[TP-PMPRO Earnings] Deleted orphaned earnings for Tutor order #%d (PMPro order no longer exists)',
+				'[TP-PMPRO Earnings] Deleted orphaned earnings and shadow order for Tutor order #%d (PMPro order no longer exists)',
 				$tutor_order_id
 			) );
 		}
 
 		return array(
 			'deleted' => $deleted,
-			'message' => sprintf( 'Deleted %d orphaned earning record(s).', $deleted ),
+			'message' => sprintf( 'Deleted %d orphaned earning record(s) and associated shadow orders.', $deleted ),
 		);
+	}
+
+	/**
+	 * Delete Tutor shadow order and all related data
+	 *
+	 * Removes the shadow order record, order items, and order meta.
+	 * This is a complete cleanup of the Tutor order structure.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int $order_id Tutor order ID.
+	 * @return bool True on success, false on failure.
+	 */
+	private function delete_tutor_order( $order_id ) {
+		global $wpdb;
+
+		// Delete order items.
+		$wpdb->delete(
+			$wpdb->prefix . 'tutor_order_items',
+			array( 'order_id' => $order_id ),
+			array( '%d' )
+		);
+
+		// Delete order meta.
+		$wpdb->delete(
+			$wpdb->prefix . 'tutor_ordermeta',
+			array( 'order_id' => $order_id ),
+			array( '%d' )
+		);
+
+		// Delete order.
+		$result = $wpdb->delete(
+			$wpdb->prefix . 'tutor_orders',
+			array( 'id' => $order_id ),
+			array( '%d' )
+		);
+
+		return (bool) $result;
+	}
+
+	/**
+	 * Maybe schedule cleanup task
+	 *
+	 * Schedules a daily task to auto-cleanup orphaned earnings if enabled.
+	 * Can be controlled via filter: apply_filters( 'tpp_enable_auto_cleanup_orphaned_earnings', false )
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	private function maybe_schedule_cleanup() {
+		$enabled = apply_filters( 'tpp_enable_auto_cleanup_orphaned_earnings', false );
+
+		if ( $enabled && ! wp_next_scheduled( 'tpp_auto_cleanup_orphaned_earnings' ) ) {
+			wp_schedule_event( time(), 'daily', 'tpp_auto_cleanup_orphaned_earnings' );
+		} elseif ( ! $enabled && wp_next_scheduled( 'tpp_auto_cleanup_orphaned_earnings' ) ) {
+			wp_clear_scheduled_hook( 'tpp_auto_cleanup_orphaned_earnings' );
+		}
+	}
+
+	/**
+	 * Scheduled cleanup of orphaned earnings
+	 *
+	 * Automatically runs daily (if enabled) to detect and clean orphaned earnings.
+	 * This catches hard-deleted PMPro orders that don't trigger WordPress hooks.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public function scheduled_cleanup_orphaned_earnings() {
+		$result = $this->cleanup_orphaned_earnings();
+
+		if ( $result['deleted'] > 0 ) {
+			error_log( sprintf(
+				'[TP-PMPRO Earnings] Auto-cleanup: %s',
+				$result['message']
+			) );
+		}
 	}
 
 	/**

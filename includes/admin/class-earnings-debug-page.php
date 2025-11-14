@@ -34,8 +34,8 @@ class Earnings_Debug_Page {
 		// Add tab to Tutor LMS Tools page.
 		add_filter( 'tutor_tool_pages', array( __CLASS__, 'add_tools_tab' ), 10, 1 );
 		
-		// Handle cleanup action.
-		add_action( 'admin_post_tpp_cleanup_orphaned', array( __CLASS__, 'handle_cleanup_orphaned' ) );
+		// AJAX handler for cleanup.
+		add_action( 'wp_ajax_tpp_cleanup_orphaned_earnings', array( __CLASS__, 'ajax_cleanup_orphaned' ) );
 	}
 
 	/**
@@ -187,38 +187,30 @@ class Earnings_Debug_Page {
 	}
 
 	/**
-	 * Handle cleanup orphaned action
+	 * AJAX handler for cleanup orphaned earnings
 	 *
 	 * @since 1.6.0
 	 */
-	public static function handle_cleanup_orphaned() {
+	public static function ajax_cleanup_orphaned() {
 		// Verify nonce.
-		if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_wpnonce'] ) ), 'tpp_cleanup_orphaned' ) ) {
-			wp_die( esc_html__( 'Security check failed.', 'tutorpress-pmpro' ) );
-		}
+		check_ajax_referer( 'tpp_cleanup_orphaned', 'nonce' );
 
 		// Verify capability.
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'You do not have sufficient permissions to access this page.', 'tutorpress-pmpro' ) );
+			wp_send_json_error( array(
+				'message' => esc_html__( 'You do not have sufficient permissions.', 'tutorpress-pmpro' ),
+			) );
 		}
 
 		// Perform cleanup.
 		$handler = PMPro_Earnings_Handler::get_instance();
 		$result = $handler->cleanup_orphaned_earnings();
 
-		// Redirect back with success message.
-		$redirect = add_query_arg(
-			array(
-				'page'     => 'tutor_tools',
-				'sub_page' => 'earnings_debug',
-				'result'   => 'cleanup_success',
-				'deleted'  => $result['deleted'],
-			),
-			admin_url( 'admin.php' )
-		);
-
-		wp_safe_redirect( $redirect );
-		exit;
+		// Send success response.
+		wp_send_json_success( array(
+			'message' => $result['message'],
+			'deleted' => $result['deleted'],
+		) );
 	}
 }
 

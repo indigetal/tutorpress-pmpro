@@ -61,30 +61,13 @@ $handler = PMPro_Earnings_Handler::get_instance();
 		</div>
 	</div>
 
-	<?php
-	// Show cleanup success message.
-	if ( isset( $_GET['result'] ) && 'cleanup_success' === $_GET['result'] ) {
-		$deleted = isset( $_GET['deleted'] ) ? intval( $_GET['deleted'] ) : 0;
-		?>
-		<div class="tutor-alert tutor-success tutor-mb-24">
-			<div class="tutor-alert-text">
-				<span class="tutor-icon-circle-mark tutor-mr-12" area-hidden="true"></span>
-				<span>
-					<strong><?php esc_html_e( 'Cleanup Complete!', 'tutorpress-pmpro' ); ?></strong>
-					<?php
-					if ( $deleted > 0 ) {
-						/* translators: %d: number of deleted records */
-						printf( esc_html__( ' Successfully deleted %d orphaned earning record(s).', 'tutorpress-pmpro' ), $deleted );
-					} else {
-						esc_html_e( ' No orphaned earnings found.', 'tutorpress-pmpro' );
-					}
-					?>
-				</span>
-			</div>
+	<!-- Alert container for AJAX responses -->
+	<div id="tpp-cleanup-alert" style="display:none;" class="tutor-alert tutor-mb-24">
+		<div class="tutor-alert-text">
+			<span class="tutor-icon-circle-mark tutor-mr-12"></span>
+			<span id="tpp-cleanup-message"></span>
 		</div>
-		<?php
-	}
-	?>
+	</div>
 
 	<!-- Cleanup Action -->
 	<div class="tutor-mb-32">
@@ -112,15 +95,10 @@ $handler = PMPro_Earnings_Handler::get_instance();
 						</span>
 					</div>
 				</div>
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>"
-					onsubmit="return confirm('<?php echo esc_js( sprintf( __( 'Are you sure you want to delete %d orphaned earning record(s)? This cannot be undone.', 'tutorpress-pmpro' ), $stats['orphaned'] ) ); ?>');">
-					<?php wp_nonce_field( 'tpp_cleanup_orphaned' ); ?>
-					<input type="hidden" name="action" value="tpp_cleanup_orphaned">
-					<button type="submit" class="tutor-btn tutor-btn-primary">
-						<span class="tutor-icon-times tutor-mr-8" style="margin-top: -2px;"></span>
-						<?php esc_html_e( 'Cleanup Orphaned Earnings', 'tutorpress-pmpro' ); ?>
-					</button>
-				</form>
+				<button type="button" id="tpp-cleanup-btn" class="tutor-btn tutor-btn-primary" data-orphaned-count="<?php echo esc_attr( $stats['orphaned'] ); ?>">
+					<span class="tutor-icon-times tutor-mr-8" style="margin-top: -2px;"></span>
+					<?php esc_html_e( 'Cleanup Orphaned Earnings', 'tutorpress-pmpro' ); ?>
+				</button>
 			<?php else : ?>
 				<div class="tutor-alert tutor-success tutor-mb-16">
 					<div class="tutor-alert-text">
@@ -133,6 +111,75 @@ $handler = PMPro_Earnings_Handler::get_instance();
 			<?php endif; ?>
 		</div>
 	</div>
+
+	<!-- AJAX Script -->
+	<script>
+	jQuery(document).ready(function($) {
+		$('#tpp-cleanup-btn').on('click', function(e) {
+			e.preventDefault();
+			
+			var btn = $(this);
+			var orphanedCount = btn.data('orphaned-count');
+			
+			// Confirm action
+			if (!confirm('<?php echo esc_js( __( 'Are you sure you want to delete orphaned earning records? This cannot be undone.', 'tutorpress-pmpro' ) ); ?>')) {
+				return;
+			}
+			
+			// Disable button and show loading
+			btn.prop('disabled', true).html('<span class="tutor-icon-spinner"></span> <?php echo esc_js( __( 'Cleaning...', 'tutorpress-pmpro' ) ); ?>');
+			
+			// Send AJAX request
+			$.ajax({
+				url: ajaxurl,
+				type: 'POST',
+				data: {
+					action: 'tpp_cleanup_orphaned_earnings',
+					nonce: '<?php echo esc_js( wp_create_nonce( 'tpp_cleanup_orphaned' ) ); ?>'
+				},
+				success: function(response) {
+					if (response.success) {
+						// Show success message
+						$('#tpp-cleanup-alert')
+							.removeClass('tutor-warning tutor-danger')
+							.addClass('tutor-success')
+							.find('#tpp-cleanup-message')
+							.html('<strong><?php esc_html_e( 'Cleanup Complete!', 'tutorpress-pmpro' ); ?></strong> ' + response.data.message);
+						$('#tpp-cleanup-alert').show();
+						
+						// Reload page after 2 seconds to update stats
+						setTimeout(function() {
+							window.location.reload();
+						}, 2000);
+					} else {
+						// Show error message
+						$('#tpp-cleanup-alert')
+							.removeClass('tutor-success tutor-warning')
+							.addClass('tutor-danger')
+							.find('#tpp-cleanup-message')
+							.html('<strong><?php esc_html_e( 'Error:', 'tutorpress-pmpro' ); ?></strong> ' + response.data.message);
+						$('#tpp-cleanup-alert').show();
+						
+						// Re-enable button
+						btn.prop('disabled', false).html('<span class="tutor-icon-times tutor-mr-8"></span><?php esc_html_e( 'Cleanup Orphaned Earnings', 'tutorpress-pmpro' ); ?>');
+					}
+				},
+				error: function() {
+					// Show error message
+					$('#tpp-cleanup-alert')
+						.removeClass('tutor-success tutor-warning')
+						.addClass('tutor-danger')
+						.find('#tpp-cleanup-message')
+						.html('<strong><?php esc_html_e( 'Error:', 'tutorpress-pmpro' ); ?></strong> <?php esc_html_e( 'An unexpected error occurred.', 'tutorpress-pmpro' ); ?>');
+					$('#tpp-cleanup-alert').show();
+					
+					// Re-enable button
+					btn.prop('disabled', false).html('<span class="tutor-icon-times tutor-mr-8"></span><?php esc_html_e( 'Cleanup Orphaned Earnings', 'tutorpress-pmpro' ); ?>');
+				}
+			});
+		});
+	});
+	</script>
 
 	<!-- Detailed Report -->
 	<div class="tutor-mb-32">
