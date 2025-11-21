@@ -29,6 +29,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 		//phpcs:enable
 
 	/**
+	 * Track courses that have reconciliation scheduled to prevent duplicates.
+	 *
+	 * @var array
+	 */
+	private $reconcile_scheduled = array();
+
+	/**
 	 * Constructor
 	 */
 	public function __construct() {
@@ -98,11 +105,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		add_action( 'rest_after_insert_courses', array( $this, 'auto_create_one_time_level_for_course' ), 10, 3 );
 		add_action( 'rest_after_insert_course-bundle', array( $this, 'auto_create_one_time_level_for_bundle' ), 10, 3 );
 
-		// Reconcile hooks (scaffolding): REST, classic save, status transition, and scheduled action
+		// Reconcile hooks (scaffolding): REST, classic save, status transition, and deletion
 		add_action( 'rest_after_insert_courses', array( $this, 'reconcile_course_levels_rest' ), 20, 3 );
 		add_action( 'save_post_courses', array( $this, 'schedule_reconcile_course_levels' ), 999, 3 );
 		add_action( 'transition_post_status', array( $this, 'maybe_reconcile_on_status' ), 20, 3 );
-		add_action( 'tp_pmpro_reconcile_course', array( $this, 'reconcile_course_levels' ), 10, 1 );
 		add_action( 'before_delete_post', array( $this, 'delete_course_levels_on_delete' ), 10, 1 );
 
 		// Admin on-demand action for manual reconciliation
@@ -631,12 +637,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$price = get_post_meta( $course_id, 'tutor_course_price', true );
 		}
 
-		$this->log( $error_prefix . ' context extracted; course=' . $course_id . ' creating=' . ( $creating ? '1' : '0' ) . ' selling_option=' . ( $so ? $so : 'n/a' ) . ' price_type=' . ( $pt ? $pt : 'n/a' ) . ' price=' . ( null !== $price ? $price : 'n/a' ) );
-
-		// Schedule reconcile shortly after REST save to ensure all meta is persisted
-		if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( $course_id ) ) ) {
-			wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( $course_id ) );
-			$this->log( $error_prefix . ' scheduled reconcile in 1s; course=' . $course_id );
+		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+		if ( ! isset( $this->reconcile_scheduled[ $course_id ] ) ) {
+			$this->reconcile_scheduled[ $course_id ] = true;
+			
+			add_action( 'shutdown', function() use ( $course_id ) {
+				$this->reconcile_course_levels( $course_id, array( 'source' => 'shutdown' ) );
+			}, 999 );
 		}
 	}
 
@@ -657,10 +664,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$this->log( '[TP-PMPRO] schedule_reconcile_course_levels skipped (not published); course=' . (int) $post_id );
 			return;
 		}
-		$this->log( '[TP-PMPRO] schedule_reconcile_course_levels fired; course=' . (int) $post_id . ' update=' . ( $update ? '1' : '0' ) );
-		if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( (int) $post_id ) ) ) {
-			wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( (int) $post_id ) );
-			$this->log( '[TP-PMPRO] scheduled reconcile in 1s; course=' . (int) $post_id );
+		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+		if ( ! isset( $this->reconcile_scheduled[ $post_id ] ) ) {
+			$this->reconcile_scheduled[ $post_id ] = true;
+			
+			add_action( 'shutdown', function() use ( $post_id ) {
+				$this->reconcile_course_levels( (int) $post_id, array( 'source' => 'shutdown' ) );
+			}, 999 );
 		}
 	}
 
@@ -677,10 +687,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		if ( 'publish' === $new_status && 'publish' !== $old_status ) {
-			$this->log( '[TP-PMPRO] maybe_reconcile_on_status fired; course=' . (int) $post->ID . ' new=publish old=' . $old_status );
-			if ( ! wp_next_scheduled( 'tp_pmpro_reconcile_course', array( (int) $post->ID ) ) ) {
-				wp_schedule_single_event( time() + 1, 'tp_pmpro_reconcile_course', array( (int) $post->ID ) );
-				$this->log( '[TP-PMPRO] maybe_reconcile_on_status scheduled reconcile in 1s; course=' . (int) $post->ID );
+			// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+			if ( ! isset( $this->reconcile_scheduled[ $post->ID ] ) ) {
+				$this->reconcile_scheduled[ $post->ID ] = true;
+				
+				add_action( 'shutdown', function() use ( $post ) {
+					$this->reconcile_course_levels( (int) $post->ID, array( 'source' => 'shutdown' ) );
+				}, 999 );
 			}
 		}
 	}
@@ -800,7 +813,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
-	 * Scheduled reconcile handler (scaffold w/ logs).
+	 * Reconcile handler - synchronizes PMPro levels with course pricing settings.
 	 *
 	 * @param int   $course_id
 	 * @param array $ctx Optional context
@@ -884,25 +897,32 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		// Branch handling: free / membership / subscription / one_time / both / all
 		if ( 'free' === $price_type ) {
+			$this->log( '[TP-PMPRO] reconcile_course_levels branch=free; course=' . $course_id );
 			$this->handle_free_branch( $course_id, $state );
 			return;
 		}
 		if ( 'membership' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_course_levels branch=membership; course=' . $course_id );
 			$this->handle_membership_branch( $course_id, $state );
 			return;
 		}
 		if ( 'subscription' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_course_levels branch=subscription; course=' . $course_id );
 			$this->handle_subscription_branch( $course_id, $state );
 			return;
 		}
 		if ( 'one_time' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_course_levels branch=one_time; course=' . $course_id );
 			$this->handle_one_time_branch( $course_id, $state );
 			return;
 		}
 		if ( 'both' === $selling_option || 'all' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_course_levels branch=both_or_all; course=' . $course_id . ' selling_option=' . $selling_option );
 			$this->handle_both_and_all_branch( $course_id, $state );
 			return;
 		}
+		// Log unhandled case
+		$this->log( '[TP-PMPRO] reconcile_course_levels branch=UNHANDLED; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) );
 		// Default: ensure meta matches valid IDs (fallback for undefined selling options)
 		if ( ! empty( $state['valid_ids'] ) ) {
 			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
@@ -1572,6 +1592,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
 		}
 
+		// Phase 5: Add level to course group
+		self::add_level_to_course_group( $object_id, $level_id );
+
 		// Successfully attached the level.
 	}
 
@@ -1655,6 +1678,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return false;
 		}
 
+		global $wpdb;
+		
+		// Multisite fix: Ensure PMPro groups table name is properly set
+		// PMPro uses per-site tables, so we need $wpdb->prefix, not $wpdb->base_prefix
+		$groups_table = $wpdb->prefix . 'pmpro_groups';
+		$groups_levels_table = $wpdb->prefix . 'pmpro_membership_levels_groups';
+		
+		// Verify tables exist (PMPro may not have groups enabled)
+		$table_exists = $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $groups_table ) );
+		if ( ! $table_exists ) {
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (groups table not found: ' . $groups_table . '); course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+			}
+			return false;
+		}
+
 		// Get current course title (always fresh)
 		$course_title = get_the_title( $course_id );
 		$group_name = sprintf( __( 'Course: %s', 'tutorpress-pmpro' ), $course_title );
@@ -1666,9 +1705,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( $group ) {
 				// Sync group name with current course title (handles course renames)
 				if ( $group->name !== $group_name ) {
-					global $wpdb;
 					$wpdb->update(
-						$wpdb->pmpro_groups,
+						$groups_table,
 						array( 'name' => $group_name ),
 						array( 'id' => $existing_group_id ),
 						array( '%s' ),
@@ -1693,13 +1731,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( $group_id ) {
 			update_post_meta( $course_id, '_tutorpress_pmpro_group_id', $group_id );
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] get_or_create_course_level_group created_group=' . $group_id . ' name="' . $group_name . '" course=' . $course_id );
+				error_log( '[TP-PMPRO] get_or_create_course_level_group created_group=' . $group_id . ' name="' . $group_name . '" course=' . $course_id . ' blog_id=' . get_current_blog_id() );
 			}
 			return (int) $group_id;
 		}
 
 		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-			error_log( '[TP-PMPRO] get_or_create_course_level_group failed to create group; course=' . $course_id );
+			error_log( '[TP-PMPRO] get_or_create_course_level_group failed to create group; course=' . $course_id . ' blog_id=' . get_current_blog_id() );
 		}
 		return false;
 	}
@@ -1710,22 +1748,92 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * @since 1.6.0
 	 * @param int $course_id The course ID
 	 * @param int $level_id The level ID
-	 * @return void
+	 * @return bool True if added successfully, false otherwise
 	 */
 	public static function add_level_to_course_group( $course_id, $level_id ) {
 		if ( ! function_exists( 'pmpro_add_level_to_group' ) ) {
-			return;
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] add_level_to_course_group skipped (pmpro_add_level_to_group not available); level=' . $level_id . ' course=' . $course_id );
+			}
+			return false;
 		}
 
 		$group_id = self::get_or_create_course_level_group( $course_id );
 		if ( ! $group_id ) {
-			return;
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] add_level_to_course_group failed (no group_id); level=' . $level_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+			}
+			return false;
 		}
 
-		pmpro_add_level_to_group( $level_id, $group_id );
-		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-			error_log( '[TP-PMPRO] add_level_to_course_group level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id );
+		// Check if level is already in a group (PMPro doesn't allow levels in multiple groups)
+		global $wpdb;
+		$groups_levels_table = $wpdb->prefix . 'pmpro_membership_levels_groups';
+		$existing_group = $wpdb->get_var( $wpdb->prepare(
+			"SELECT `group` FROM {$groups_levels_table} WHERE level = %d LIMIT 1",
+			$level_id
+		) );
+		
+		if ( $existing_group && (int) $existing_group !== (int) $group_id ) {
+			// Level is in a different group - remove it first
+			$wpdb->delete( $groups_levels_table, array( 'level' => $level_id ), array( '%d' ) );
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] add_level_to_course_group removed level from old group=' . $existing_group . '; level=' . $level_id . ' course=' . $course_id );
+			}
+		} elseif ( $existing_group && (int) $existing_group === (int) $group_id ) {
+			// Already in the correct group
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] add_level_to_course_group already in group; level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id );
+			}
+			return true;
 		}
+		
+		// Add level to group using PMPro's function
+		$result = pmpro_add_level_to_group( $level_id, $group_id );
+		
+		// If PMPro function failed, try direct database insert as fallback
+		if ( ! $result ) {
+			// Verify the group exists first
+			$groups_table = $wpdb->prefix . 'pmpro_groups';
+			$group_exists = $wpdb->get_var( $wpdb->prepare(
+				"SELECT id FROM {$groups_table} WHERE id = %d",
+				$group_id
+			) );
+			
+			if ( $group_exists ) {
+				// Direct insert as fallback
+				$inserted = $wpdb->insert(
+					$groups_levels_table,
+					array(
+						'group' => $group_id,
+						'level' => $level_id,
+					),
+					array( '%d', '%d' )
+				);
+				
+				if ( $inserted ) {
+					$result = true;
+					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+						error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS (fallback direct insert); level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+					}
+				} else {
+					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+						$wpdb_error = $wpdb->last_error ? $wpdb->last_error : 'none';
+						error_log( '[TP-PMPRO] add_level_to_course_group FAILED (direct insert also failed); level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() . ' wpdb_error=' . $wpdb_error );
+					}
+				}
+			} else {
+				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+					error_log( '[TP-PMPRO] add_level_to_course_group FAILED (group does not exist); level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+				}
+			}
+		} else {
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS; level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+			}
+		}
+		
+		return (bool) $result;
 	}
 
 
@@ -1754,12 +1862,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( $deleted ) {
 				delete_post_meta( $course_id, '_tutorpress_pmpro_group_id' );
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					error_log( '[TP-PMPRO] delete_course_level_group_if_empty deleted_group=' . $group_id . ' course=' . $course_id );
+					error_log( '[TP-PMPRO] delete_course_level_group_if_empty deleted_group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+				}
+			} else {
+				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+					error_log( '[TP-PMPRO] delete_course_level_group_if_empty failed to delete group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
 				}
 			}
 		} else {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] delete_course_level_group_if_empty group_not_empty=' . $group_id . ' level_count=' . count( $levels_in_group ) . ' course=' . $course_id );
+				error_log( '[TP-PMPRO] delete_course_level_group_if_empty group_not_empty=' . $group_id . ' level_count=' . count( $levels_in_group ) . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
 			}
 		}
 	}
