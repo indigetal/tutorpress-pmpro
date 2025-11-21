@@ -257,9 +257,6 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 
 		// Filter plans by the course's current selling_option (if applicable)
-		// Force cache refresh in multisite environments where object caching may be stale
-		clean_post_cache( $course_id );
-		
 		$selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
 		$this->log( '[TP-PMPRO] get_course_subscriptions filter: course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'empty' ) . ' plans_before_filter=' . count( $plans ) );
 		if ( ! empty( $plans ) && ! empty( $selling_option ) ) {
