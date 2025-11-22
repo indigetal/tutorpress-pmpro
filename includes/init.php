@@ -1762,7 +1762,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( ! $group_id ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] add_level_to_course_group failed (no group_id); level=' . $level_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
-			}
+		}
 			return false;
 		}
 
@@ -1777,14 +1777,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( $existing_group && (int) $existing_group !== (int) $group_id ) {
 			// Level is in a different group - remove it first
 			$wpdb->delete( $groups_levels_table, array( 'level' => $level_id ), array( '%d' ) );
-			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] add_level_to_course_group removed level from old group=' . $existing_group . '; level=' . $level_id . ' course=' . $course_id );
 			}
 		} elseif ( $existing_group && (int) $existing_group === (int) $group_id ) {
 			// Already in the correct group
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] add_level_to_course_group already in group; level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id );
-			}
+		}
 			return true;
 		}
 		

@@ -60,8 +60,18 @@ class PMPro_Earnings_Handler {
 	 * @since 1.6.0
 	 */
 	private function __construct() {
+		// Log initialization for multisite debugging
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] Handler initialized: blog_id=%d is_multisite=%s',
+			get_current_blog_id(),
+			is_multisite() ? 'yes' : 'no'
+		) );
+		
 		// Initial checkout (one-time or first subscription payment).
 		add_action( 'pmpro_after_checkout', array( $this, 'handle_checkout_complete' ), 10, 2 );
+		
+		// Alternative hook: pmpro_added_order (fires when order is saved, including async checkouts)
+		add_action( 'pmpro_added_order', array( $this, 'handle_order_added' ), 10, 1 );
 
 		// Subscription renewal payments (fired by gateway webhooks/IPNs when renewals are processed).
 		add_action( 'pmpro_subscription_payment_completed', array( $this, 'handle_subscription_renewal' ), 10, 1 );
@@ -88,6 +98,31 @@ class PMPro_Earnings_Handler {
 
 		// Schedule cleanup task if enabled.
 		$this->maybe_schedule_cleanup();
+		
+		// Log hook registration confirmation
+		error_log( '[TP-PMPRO Earnings] Hooks registered: pmpro_after_checkout, pmpro_subscription_payment_completed, pmpro_updated_order' );
+		
+		// Add test action for debugging hook execution
+		add_action( 'init', array( $this, 'test_hook_execution' ), 999 );
+	}
+	
+	/**
+	 * Test hook execution (for debugging)
+	 * 
+	 * Add ?test_pmpro_earnings=1 to any page URL to verify hooks are registered.
+	 *
+	 * @since 1.6.0
+	 */
+	public function test_hook_execution() {
+		if ( isset( $_GET['test_pmpro_earnings'] ) && current_user_can( 'manage_options' ) ) {
+			error_log( sprintf(
+				'[TP-PMPRO Earnings TEST] Hook test triggered: blog_id=%d has_pmpro_after_checkout=%s',
+				get_current_blog_id(),
+				has_action( 'pmpro_after_checkout' ) ? 'YES' : 'NO'
+			) );
+			
+			wp_die( 'PMPro Earnings test logged. Check debug.log for results.' );
+		}
 	}
 
 	/**
@@ -103,8 +138,18 @@ class PMPro_Earnings_Handler {
 	 * @return void
 	 */
 	public function handle_checkout_complete( $user_id, $morder ) {
+		// Multisite debugging
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] handle_checkout_complete fired: user=%d pmpro_order=%d level=%d blog_id=%d',
+			$user_id,
+			$morder->id,
+			$morder->membership_id,
+			get_current_blog_id()
+		) );
+		
 		// Skip if revenue sharing is disabled.
 		if ( ! $this->is_revenue_sharing_enabled() ) {
+			error_log( '[TP-PMPRO Earnings] Revenue sharing disabled, skipping' );
 			return;
 		}
 
@@ -127,13 +172,31 @@ class PMPro_Earnings_Handler {
 		// Get the membership level.
 		$level = pmpro_getLevel( $morder->membership_id );
 		if ( ! $level ) {
+			error_log( '[TP-PMPRO Earnings] Could not get level for membership_id=' . $morder->membership_id );
 			return;
 		}
 
 		// Check if this is a TutorPress-managed course-specific level.
-		$course_id = get_pmpro_membership_level_meta( $level->id, 'tutorpress_course_id', true );
+		// Multisite fix: Query level meta directly with proper table prefix
+		$course_id = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->prefix}pmpro_membership_levelmeta
+				 WHERE pmpro_membership_level_id = %d AND meta_key = 'tutorpress_course_id'
+				 LIMIT 1",
+				$level->id
+			)
+		);
+		
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] Level meta lookup: level_id=%d course_id=%s table=%spmpro_membership_levelmeta',
+			$level->id,
+			$course_id ? $course_id : 'NULL',
+			$wpdb->prefix
+		) );
+		
 		if ( ! $course_id ) {
 			// Not a course-specific level (e.g., full-site membership) - skip earnings.
+			error_log( '[TP-PMPRO Earnings] No course_id found for level ' . $level->id . ', skipping (not a course-specific level)' );
 			return;
 		}
 
@@ -174,6 +237,42 @@ class PMPro_Earnings_Handler {
 			$tutor_order_id
 		) );
 	}
+	
+	/**
+	 * Handle order added (alternative to pmpro_after_checkout)
+	 *
+	 * This hook fires when an order is saved, including async checkouts via Stripe webhooks.
+	 * It's more reliable than pmpro_after_checkout for webhook-based completions.
+	 *
+	 * PMPro passes only the order object, so we extract user_id from it.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param object $morder PMPro order object.
+	 * @return void
+	 */
+	public function handle_order_added( $morder ) {
+		// Extract user_id from the order object
+		$user_id = isset( $morder->user_id ) ? $morder->user_id : 0;
+		
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] pmpro_added_order fired: user=%d order=%d level=%d status=%s blog_id=%d',
+			$user_id,
+			isset( $morder->id ) ? $morder->id : 0,
+			isset( $morder->membership_id ) ? $morder->membership_id : 0,
+			isset( $morder->status ) ? $morder->status : 'unknown',
+			get_current_blog_id()
+		) );
+		
+		// Only process completed/success orders
+		if ( ! isset( $morder->status ) || ! in_array( $morder->status, array( 'success', 'completed' ), true ) ) {
+			error_log( '[TP-PMPRO Earnings] Order status is ' . ( isset( $morder->status ) ? $morder->status : 'unknown' ) . ', skipping (not success/completed)' );
+			return;
+		}
+		
+		// Delegate to the main checkout handler
+		$this->handle_checkout_complete( $user_id, $morder );
+	}
 
 	/**
 	 * Handle subscription renewal payment
@@ -205,10 +304,20 @@ class PMPro_Earnings_Handler {
 		error_log( '[TP-PMPRO Earnings] Processing renewal for level #' . $level->id . ', user #' . ( isset( $morder->user_id ) ? $morder->user_id : 'unknown' ) );
 
 		// Check if this is a TutorPress-managed course-specific level.
-		$course_id = get_pmpro_membership_level_meta( $level->id, 'tutorpress_course_id', true );
+		// Multisite fix: Query level meta directly with proper table prefix
+		global $wpdb;
+		$course_id = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->prefix}pmpro_membership_levelmeta
+				 WHERE pmpro_membership_level_id = %d AND meta_key = 'tutorpress_course_id'
+				 LIMIT 1",
+				$level->id
+			)
+		);
+		
 		if ( ! $course_id ) {
 			// Not a course-specific level - skip earnings.
-			error_log( '[TP-PMPRO Earnings] Level #' . $level->id . ' is not a course-specific level, skipping renewal earnings' );
+			error_log( '[TP-PMPRO Earnings] Level #' . $level->id . ' is not a course-specific level, skipping renewal earnings (blog_id=' . get_current_blog_id() . ')' );
 			return;
 		}
 
@@ -250,13 +359,15 @@ class PMPro_Earnings_Handler {
 	/**
 	 * Handle order status changes (refunds, cancellations)
 	 *
+	 * Note: PMPro sometimes passes only 1 argument, so $old_order is optional.
+	 *
 	 * @since 1.6.0
 	 *
-	 * @param int    $order_id PMPro order ID.
-	 * @param object $old_order Old order object (before update).
+	 * @param int         $order_id  PMPro order ID.
+	 * @param object|null $old_order Old order object (before update), optional.
 	 * @return void
 	 */
-	public function handle_order_status_change( $order_id, $old_order ) {
+	public function handle_order_status_change( $order_id, $old_order = null ) {
 		// Get updated order.
 		$new_order = new \MemberOrder( $order_id );
 
@@ -729,6 +840,28 @@ class PMPro_Earnings_Handler {
 			try {
 				$result = $earnings->store_earnings();
 				error_log( '[TP-PMPRO Earnings] store_earnings SUCCESS - last insert ID: ' . $result );
+				
+				// Verify the earnings record was stored correctly with order_status='completed'
+				$stored_earning = $wpdb->get_row(
+					$wpdb->prepare(
+						"SELECT earning_id, order_id, order_status, instructor_amount, user_id FROM {$wpdb->prefix}tutor_earnings WHERE earning_id = %d",
+						$result
+					)
+				);
+				
+				if ( $stored_earning ) {
+					error_log( sprintf(
+						'[TP-PMPRO Earnings] Verified stored earning: earning_id=%d order_id=%d order_status=%s instructor_amount=%s user_id=%d blog_id=%d',
+						$stored_earning->earning_id,
+						$stored_earning->order_id,
+						$stored_earning->order_status,
+						$stored_earning->instructor_amount,
+						$stored_earning->user_id,
+						get_current_blog_id()
+					) );
+				} else {
+					error_log( '[TP-PMPRO Earnings] WARNING: Could not verify stored earning record!' );
+				}
 			} catch ( \Exception $e ) {
 				error_log( '[TP-PMPRO Earnings] store_earnings FAILED: ' . $e->getMessage() );
 			}
