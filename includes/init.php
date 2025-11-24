@@ -114,6 +114,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Admin on-demand action for manual reconciliation
 		add_filter( 'bulk_actions-edit-courses', array( $this, 'add_reconcile_bulk_action' ) );
 		add_action( 'handle_bulk_actions-edit-courses', array( $this, 'handle_reconcile_bulk_action' ), 10, 3 );
+
+		// Bundle reconcile hooks (mirror course hooks)
+		add_action( 'rest_after_insert_course-bundle', array( $this, 'reconcile_bundle_levels_rest' ), 20, 3 );
+		add_action( 'save_post_course-bundle', array( $this, 'schedule_reconcile_bundle_levels' ), 999, 3 );
+		add_action( 'transition_post_status', array( $this, 'maybe_reconcile_bundle_on_status' ), 20, 3 );
+		add_action( 'before_delete_post', array( $this, 'delete_bundle_levels_on_delete' ), 10, 1 );
+
+		// Admin on-demand action for manual bundle reconciliation
+		add_filter( 'bulk_actions-edit-course-bundle', array( $this, 'add_reconcile_bulk_action' ) );
+		add_action( 'handle_bulk_actions-edit-course-bundle', array( $this, 'handle_reconcile_bulk_action' ), 10, 3 );
 	}
 
 	public function notice_tutor_missing() {
@@ -699,6 +709,164 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * REST entrypoint for bundle-level reconcile (with context extraction).
+	 *
+	 * @param WP_Post         $post
+	 * @param WP_REST_Request $request
+	 * @param bool            $creating
+	 * @return void
+	 */
+	public function reconcile_bundle_levels_rest( $post, $request, $creating ) {
+		$bundle_id = is_object( $post ) ? (int) $post->ID : (int) $post;
+		$error_prefix = '[TP-PMPRO] reconcile_bundle_levels_rest';
+		// Guard: only proceed for published bundles
+		if ( 'publish' !== get_post_status( $bundle_id ) ) {
+			$this->log( $error_prefix . ' skipped (not published); bundle=' . $bundle_id );
+			return;
+		}
+
+		// Extract context from REST request (same pattern as courses)
+		$so_keys = array( 'selling_option', 'tutor_course_selling_option' );
+		$pt_keys = array( 'price_type', 'tutor_course_price_type', '_tutor_course_price_type' );
+		$price_keys = array( 'price', 'tutor_course_price', 'sale_price', 'tutor_course_sale_price' );
+		$so = null; $pt = null; $price = null;
+		if ( method_exists( $request, 'get_param' ) ) {
+			foreach ( $so_keys as $k ) { if ( null === $so ) { $so = $request->get_param( $k ); } }
+			foreach ( $pt_keys as $k ) { if ( null === $pt ) { $pt = $request->get_param( $k ); } }
+			foreach ( $price_keys as $k ) { if ( null === $price ) { $price = $request->get_param( $k ); } }
+		}
+		
+		// Fallback to post meta if not in request (use standard Tutor Core meta keys)
+		if ( null === $so ) {
+			$so = get_post_meta( $bundle_id, 'tutor_course_selling_option', true );
+		}
+		if ( null === $pt ) {
+			$pt = get_post_meta( $bundle_id, '_tutor_course_price_type', true );
+		}
+		if ( null === $price ) {
+			$price = get_post_meta( $bundle_id, 'tutor_course_price', true );
+		}
+
+		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+		if ( ! isset( $this->reconcile_scheduled[ $bundle_id ] ) ) {
+			$this->reconcile_scheduled[ $bundle_id ] = true;
+			
+			add_action( 'shutdown', function() use ( $bundle_id ) {
+				$this->reconcile_bundle_levels( $bundle_id, array( 'source' => 'shutdown' ) );
+			}, 999 );
+		}
+	}
+
+	/**
+	 * Classic save entrypoint schedules bundle reconcile (scaffold w/ logs).
+	 *
+	 * @param int     $post_id
+	 * @param WP_Post $post
+	 * @param bool    $update
+	 * @return void
+	 */
+	public function schedule_reconcile_bundle_levels( $post_id, $post, $update ) {
+		if ( 'course-bundle' !== get_post_type( $post_id ) ) {
+			return;
+		}
+		// Guard: only schedule reconcile for published bundles
+		if ( 'publish' !== get_post_status( $post_id ) ) {
+			$this->log( '[TP-PMPRO] schedule_reconcile_bundle_levels skipped (not published); bundle=' . (int) $post_id );
+			return;
+		}
+		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+		if ( ! isset( $this->reconcile_scheduled[ $post_id ] ) ) {
+			$this->reconcile_scheduled[ $post_id ] = true;
+			
+			add_action( 'shutdown', function() use ( $post_id ) {
+				$this->reconcile_bundle_levels( (int) $post_id, array( 'source' => 'shutdown' ) );
+			}, 999 );
+		}
+	}
+
+	/**
+	 * Bundle status transition entrypoint (scaffold w/ logs).
+	 *
+	 * @param string  $new_status
+	 * @param string  $old_status
+	 * @param WP_Post $post
+	 * @return void
+	 */
+	public function maybe_reconcile_bundle_on_status( $new_status, $old_status, $post ) {
+		if ( ! $post || 'course-bundle' !== get_post_type( $post ) ) {
+			return;
+		}
+		if ( 'publish' === $new_status && 'publish' !== $old_status ) {
+			// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+			if ( ! isset( $this->reconcile_scheduled[ $post->ID ] ) ) {
+				$this->reconcile_scheduled[ $post->ID ] = true;
+				
+				add_action( 'shutdown', function() use ( $post ) {
+					$this->reconcile_bundle_levels( (int) $post->ID, array( 'source' => 'shutdown' ) );
+				}, 999 );
+			}
+		}
+	}
+
+	/**
+	 * Delete bundle levels when bundle is deleted.
+	 *
+	 * @param int $post_id
+	 * @return void
+	 */
+	public function delete_bundle_levels_on_delete( $post_id ) {
+		$post_id = (int) $post_id;
+		$post_type = get_post_type( $post_id );
+		if ( 'course-bundle' !== $post_type ) {
+			return;
+		}
+
+		global $wpdb;
+		$level_ids = array();
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$level_ids = $wpdb->get_col( $wpdb->prepare( "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $post_id ) );
+		}
+		$meta_ids = get_post_meta( $post_id, '_tutorpress_pmpro_levels', true );
+		if ( is_array( $meta_ids ) ) {
+			$level_ids = array_merge( $level_ids, $meta_ids );
+		}
+		// Also check reverse meta for bundle_id
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$reverse_meta_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
+				'tutorpress_bundle_id',
+				(string) $post_id
+			) );
+			$level_ids = array_merge( $level_ids, $reverse_meta_ids );
+		}
+		$level_ids = array_values( array_unique( array_map( 'intval', (array) $level_ids ) ) );
+		if ( empty( $level_ids ) ) {
+			return;
+		}
+
+		// Ensure cleanup class is available
+		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+			require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
+		}
+
+		foreach ( $level_ids as $lid ) {
+			$owned_by_bundle = false;
+			if ( function_exists( 'get_pmpro_membership_level_meta' ) ) {
+				$owner = (int) get_pmpro_membership_level_meta( $lid, 'tutorpress_bundle_id', true );
+				$owned_by_bundle = ( $owner === $post_id );
+			}
+			if ( $owned_by_bundle ) {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
+				$this->log( '[TP-PMPRO] delete_bundle_levels_on_delete deleted_level_id=' . (int) $lid . ' bundle=' . $post_id );
+			}
+		}
+		delete_post_meta( $post_id, '_tutorpress_pmpro_levels' );
+		
+		// Delete bundle level group if empty
+		self::delete_course_level_group_if_empty( $post_id );
+	}
+
+	/**
 	 * Get reliable PMPro state for a course.
 	 *
 	 * - Discovers associations from pmpro_memberships_pages (source of truth)
@@ -804,6 +972,166 @@ if ( ! defined( 'ABSPATH' ) ) {
 		update_post_meta( $course_id, '_tutorpress_pmpro_levels', $valid_ids );
 
 		$this->log( '[TP-PMPRO] get_course_pmpro_state discovered; course=' . $course_id . ' valid=' . count( $valid_ids ) . ' one_time=' . count( $one_time_ids ) . ' recurring=' . count( $recurring_ids ) . ' stale=' . count( $stale_ids ) . ' source=' . $src );
+
+		return array(
+			'valid_ids'     => $valid_ids,
+			'one_time_ids'  => $one_time_ids,
+			'recurring_ids' => $recurring_ids,
+		);
+	}
+
+	/**
+	 * Calculate bundle regular price by summing regular prices of included courses.
+	 *
+	 * @since 1.0.0
+	 * @param int $bundle_id Bundle post ID.
+	 * @return float Total regular price (sum of course regular prices).
+	 */
+	private function calculate_bundle_regular_price( $bundle_id ) {
+		$bundle_id = (int) $bundle_id;
+		$course_ids_meta = get_post_meta( $bundle_id, 'bundle-course-ids', true );
+		
+		if ( empty( $course_ids_meta ) ) {
+			return 0.0;
+		}
+		
+		// Handle comma-separated string or array
+		if ( is_string( $course_ids_meta ) ) {
+			$course_ids = array_filter( array_map( 'intval', explode( ',', $course_ids_meta ) ) );
+		} elseif ( is_array( $course_ids_meta ) ) {
+			$course_ids = array_filter( array_map( 'intval', $course_ids_meta ) );
+		} else {
+			return 0.0;
+		}
+		
+		if ( empty( $course_ids ) ) {
+			return 0.0;
+		}
+		
+		$total = 0.0;
+		foreach ( $course_ids as $course_id ) {
+			$course_id = (int) $course_id;
+			// Skip free courses in calculation
+			$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
+			if ( 'free' === $price_type ) {
+				continue;
+			}
+			
+			$price = get_post_meta( $course_id, 'tutor_course_price', true );
+			if ( $price && $price > 0 ) {
+				$total += floatval( $price );
+			}
+		}
+		
+		return $total;
+	}
+
+	/**
+	 * Get reliable PMPro state for a bundle.
+	 *
+	 * - Discovers associations from pmpro_memberships_pages (source of truth)
+	 * - Verifies each level exists in pmpro_membership_levels
+	 * - Classifies levels as one_time or recurring
+	 * - Prunes stale associations and rewrites _tutorpress_pmpro_levels meta
+	 *
+	 * @param int   $bundle_id
+	 * @param array $ctx Optional context for logging
+	 * @return array {
+	 *     @type array $valid_ids All valid level IDs associated with this bundle
+	 *     @type array $one_time_ids Level IDs classified as one-time
+	 *     @type array $recurring_ids Level IDs classified as recurring
+	 * }
+	 */
+	private function get_bundle_pmpro_state( $bundle_id, $ctx = array() ) {
+		global $wpdb;
+		$bundle_id = (int) $bundle_id;
+		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'unknown';
+
+		// Discover associations from pmpro_memberships_pages (primary source of truth)
+		$associated_ids = array();
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$associated_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
+				$bundle_id
+			) );
+		}
+		$associated_ids = array_map( 'intval', (array) $associated_ids );
+
+		// Also read _tutorpress_pmpro_levels meta (secondary source)
+		$meta_ids = get_post_meta( $bundle_id, '_tutorpress_pmpro_levels', true );
+		if ( ! is_array( $meta_ids ) ) {
+			$meta_ids = array();
+		}
+		$meta_ids = array_map( 'intval', $meta_ids );
+
+		// Discover levels via reverse meta (tertiary source — catches orphaned reverse-meta-only levels)
+		$reverse_meta_ids = array();
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$reverse_meta_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
+				'tutorpress_bundle_id',
+				(string) $bundle_id
+			) );
+		}
+		$reverse_meta_ids = array_map( 'intval', (array) $reverse_meta_ids );
+
+		// Union of all three sources
+		$candidate_ids = array_values( array_unique( array_merge( $associated_ids, $meta_ids, $reverse_meta_ids ) ) );
+
+		// Verify each candidate level exists in pmpro_membership_levels and classify
+		$valid_ids = array();
+		$one_time_ids = array();
+		$recurring_ids = array();
+		$stale_ids = array();
+
+		foreach ( $candidate_ids as $lid ) {
+			if ( ! $lid ) {
+				continue;
+			}
+			$row = $wpdb->get_row( $wpdb->prepare(
+				"SELECT id, billing_amount, cycle_number FROM {$wpdb->pmpro_membership_levels} WHERE id = %d",
+				$lid
+			), ARRAY_A );
+
+			if ( ! $row || ! isset( $row['id'] ) ) {
+				// Level doesn't exist in PMPro DB → stale
+				$stale_ids[] = $lid;
+				continue;
+			}
+
+			$valid_ids[] = (int) $row['id'];
+			$billing = isset( $row['billing_amount'] ) ? (float) $row['billing_amount'] : 0.0;
+			$cycle = isset( $row['cycle_number'] ) ? (int) $row['cycle_number'] : 0;
+			$is_one_time = ( $billing <= 0 && $cycle === 0 );
+
+			if ( $is_one_time ) {
+				$one_time_ids[] = (int) $row['id'];
+			} else {
+				$recurring_ids[] = (int) $row['id'];
+			}
+		}
+
+		// Prune stale associations and rewrite meta
+		if ( ! empty( $stale_ids ) ) {
+			// Ensure cleanup class is available
+			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+				require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
+			}
+			foreach ( $stale_ids as $sid ) {
+				// Use full_delete_level for stale ids so we also remove any lingering
+				// level meta, categories and association rows even when the level
+				// row itself may already be missing. full_delete_level is idempotent
+				// and safe when called for non-existent ids.
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( $sid, true );
+				$this->log( '[TP-PMPRO] get_bundle_pmpro_state pruned_stale_level=' . $sid . ' bundle=' . $bundle_id . ' source=' . $src );
+			}
+			$this->log( '[TP-PMPRO] get_bundle_pmpro_state pruned_stale_count=' . count( $stale_ids ) . ' bundle=' . $bundle_id . ' source=' . $src );
+		}
+
+		// Rewrite _tutorpress_pmpro_levels to match verified valid_ids
+		update_post_meta( $bundle_id, '_tutorpress_pmpro_levels', $valid_ids );
+
+		$this->log( '[TP-PMPRO] get_bundle_pmpro_state discovered; bundle=' . $bundle_id . ' valid=' . count( $valid_ids ) . ' one_time=' . count( $one_time_ids ) . ' recurring=' . count( $recurring_ids ) . ' stale=' . count( $stale_ids ) . ' source=' . $src );
 
 		return array(
 			'valid_ids'     => $valid_ids,
@@ -931,6 +1259,141 @@ if ( ! defined( 'ABSPATH' ) ) {
 			// Always cleanup lock, even if exception or early return
 			delete_transient( $lock_key );
 			$this->log( '[TP-PMPRO] reconcile_course_levels released_lock; course=' . $course_id );
+		}
+	}
+
+	/**
+	 * Reconcile handler - synchronizes PMPro levels with bundle pricing settings.
+	 *
+	 * @param int   $bundle_id
+	 * @param array $ctx Optional context
+	 * @return void
+	 */
+	public function reconcile_bundle_levels( $bundle_id, $ctx = array() ) {
+		$bundle_id = (int) $bundle_id;
+		// Guard: only reconcile for published bundles
+		if ( 'publish' !== get_post_status( $bundle_id ) ) {
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels skipped (not published); bundle=' . $bundle_id );
+			return;
+		}
+		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
+		$this->log( '[TP-PMPRO] reconcile_bundle_levels fired; bundle=' . $bundle_id . ' source=' . $src );
+
+		// Step 0: Acquire short-lived lock to prevent concurrent double-runs
+		$lock_key = 'tp_pmpro_lock_bundle_' . $bundle_id;
+		if ( get_transient( $lock_key ) ) {
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels skipped (already running); bundle=' . $bundle_id );
+			return;
+		}
+		set_transient( $lock_key, 1, 5 ); // 5-second lock expiry
+		$this->log( '[TP-PMPRO] reconcile_bundle_levels acquired_lock; bundle=' . $bundle_id );
+
+		try {
+			// Consume any pending plans saved while in draft (same pattern as courses)
+			$pending = get_post_meta( $bundle_id, '_tutorpress_pmpro_pending_plans', true );
+			if ( is_array( $pending ) && ! empty( $pending ) ) {
+				$this->log( '[TP-PMPRO] reconcile_bundle_levels pending_count=' . count( $pending ) . ' bundle=' . $bundle_id );
+				foreach ( $pending as $plan_params ) {
+					try {
+						// Map to PMPro level data and create level now that we're published
+						require_once $this->path . 'includes/utilities/class-pmpro-mapper.php';
+						$mapper = new \TutorPress_PMPro_Mapper();
+						$level_data = $mapper->map_ui_to_pmpro( (array) $plan_params );
+						$db_data = $level_data;
+						if ( isset( $db_data['meta'] ) ) { unset( $db_data['meta'] ); }
+						// Normalize recurring vs one_time if provided
+						if ( isset( $level_data['payment_type'] ) && 'one_time' === $level_data['payment_type'] ) {
+							$db_data['billing_amount'] = 0; $db_data['cycle_number'] = 0; $db_data['cycle_period'] = ''; $db_data['billing_limit'] = 0;
+						}
+						global $wpdb;
+						$wpdb->insert( $wpdb->pmpro_membership_levels, $db_data );
+						$level_id = (int) $wpdb->insert_id;
+						if ( $level_id > 0 ) {
+							// ✅ KEY INSIGHT: Always set reverse ownership meta (bundle_id, not course_id)
+							if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+								update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_id', $bundle_id );
+								update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
+							}
+							// ✅ KEY INSIGHT: Always ensure association row exists
+							if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
+								require_once $this->path . 'includes/utilities/class-pmpro-association.php';
+							}
+							\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $bundle_id, $level_id );
+							
+							// Update bundle meta list
+							$existing = get_post_meta( $bundle_id, '_tutorpress_pmpro_levels', true );
+							if ( ! is_array( $existing ) ) { $existing = array(); }
+							$existing[] = $level_id;
+							update_post_meta( $bundle_id, '_tutorpress_pmpro_levels', array_values( array_unique( array_map( 'intval', $existing ) ) ) );
+							$this->log( '[TP-PMPRO] reconcile_bundle_levels created_level_id=' . $level_id . ' owner=' . $bundle_id . ' assoc=ensured bundle=' . $bundle_id );
+						}
+					} catch ( \Exception $e ) {
+						$this->log( '[TP-PMPRO] reconcile_bundle_levels error creating pending plan: ' . $e->getMessage() . ' bundle=' . $bundle_id );
+					}
+				}
+				// Clear pending
+				delete_post_meta( $bundle_id, '_tutorpress_pmpro_pending_plans' );
+			}
+
+		// Step 2: Association discovery and context extraction
+		$state = $this->get_bundle_pmpro_state( $bundle_id, array( 'source' => $src ) );
+		
+		// Read bundle pricing context from post meta (use standard Tutor Core meta keys)
+		$selling_option = get_post_meta( $bundle_id, 'tutor_course_selling_option', true );
+		$price_type = get_post_meta( $bundle_id, '_tutor_course_price_type', true );
+		
+		// For bundles: regular_price is auto-calculated, sale_price is instructor-set
+		$regular_price = $this->calculate_bundle_regular_price( $bundle_id );
+		$sale_price = get_post_meta( $bundle_id, 'tutor_course_sale_price', true );
+			
+		// Format prices for logging (0 is valid, so check if numeric)
+		$regular_price_log = is_numeric( $regular_price ) ? $regular_price : 'n/a';
+		$sale_price_log = is_numeric( $sale_price ) ? $sale_price : 'n/a';
+		$this->log( '[TP-PMPRO] reconcile_bundle_levels context; bundle=' . $bundle_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' regular_price=' . $regular_price_log . ' sale_price=' . $sale_price_log . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
+
+		// Branch handling: free / membership / subscription / one_time / both / all
+		// Note: For bundles, if regular_price = 0 (all courses free), treat as free
+		if ( 'free' === $price_type || $regular_price <= 0 ) {
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=free; bundle=' . $bundle_id );
+			$this->handle_free_branch( $bundle_id, $state );
+			return;
+		}
+		if ( 'membership' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=membership; bundle=' . $bundle_id );
+			$this->handle_membership_branch( $bundle_id, $state );
+			return;
+		}
+		if ( 'subscription' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=subscription; bundle=' . $bundle_id );
+			// TODO: Handle subscription branch for bundles (will be implemented in later step)
+			// For now, log and return
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels subscription branch not yet implemented for bundles; bundle=' . $bundle_id );
+			return;
+		}
+		if ( 'one_time' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=one_time; bundle=' . $bundle_id );
+			// TODO: Handle one-time branch for bundles (will be implemented in later step)
+			// For now, log and return
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels one_time branch not yet implemented for bundles; bundle=' . $bundle_id );
+			return;
+		}
+		if ( 'both' === $selling_option || 'all' === $selling_option ) {
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=both_or_all; bundle=' . $bundle_id . ' selling_option=' . $selling_option );
+			// TODO: Handle both/all branch for bundles (will be implemented in later step)
+			// For now, log and return
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels both/all branch not yet implemented for bundles; bundle=' . $bundle_id );
+			return;
+		}
+		// Log unhandled case
+		$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=UNHANDLED; bundle=' . $bundle_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) );
+		// Default: ensure meta matches valid IDs (fallback for undefined selling options)
+		if ( ! empty( $state['valid_ids'] ) ) {
+			update_post_meta( $bundle_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
+		}
+		} finally {
+			// Always cleanup lock, even if exception or early return
+			delete_transient( $lock_key );
+			$this->log( '[TP-PMPRO] reconcile_bundle_levels released_lock; bundle=' . $bundle_id );
 		}
 	}
 
