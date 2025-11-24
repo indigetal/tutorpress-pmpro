@@ -1320,6 +1320,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 							}
 							\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $bundle_id, $level_id );
 							
+							// Phase 5: Add level to bundle group
+							self::add_level_to_course_group( $bundle_id, $level_id, 'course-bundle' );
+							
 							// Update bundle meta list
 							$existing = get_post_meta( $bundle_id, '_tutorpress_pmpro_levels', true );
 							if ( ! is_array( $existing ) ) { $existing = array(); }
@@ -2122,21 +2125,36 @@ if ( ! defined( 'ABSPATH' ) ) {
 	// We do NOT add custom type meta - we use PMPro's native inference.
 
 	/**
-	 * Get or create a level group for a course.
+	 * Get or create a level group for a course or bundle.
 	 *
-	 * Creates a group named "Course: {Course Title}" with allow_multiple_selections = false
-	 * so users can only select one pricing option per course.
+	 * Creates a group named "Course: {Title}" or "Bundle: {Title}" with allow_multiple_selections = false
+	 * so users can only select one pricing option per course/bundle.
 	 *
-	 * Also syncs the group name with the current course title to handle course renames.
+	 * Also syncs the group name with the current title to handle renames.
 	 *
 	 * @since 1.6.0
-	 * @param int $course_id The course ID
+	 * @since 1.7.0 Added bundle support
+	 * @param int    $object_id The course or bundle ID
+	 * @param string $post_type Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
 	 * @return int|false The group ID, or false on failure
 	 */
-	public static function get_or_create_course_level_group( $course_id ) {
+	public static function get_or_create_course_level_group( $object_id, $post_type = null ) {
 		if ( ! function_exists( 'pmpro_create_level_group' ) ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (PMPro groups not available); course=' . $course_id );
+				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (PMPro groups not available); object=' . $object_id );
+			}
+			return false;
+		}
+
+		// Auto-detect post type if not provided
+		if ( null === $post_type ) {
+			$post_type = get_post_type( $object_id );
+		}
+
+		// Validate post type
+		if ( ! in_array( $post_type, array( 'courses', 'course-bundle' ), true ) ) {
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (invalid post_type: ' . $post_type . '); object=' . $object_id );
 			}
 			return false;
 		}
@@ -2152,21 +2170,26 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$table_exists = $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $groups_table ) );
 		if ( ! $table_exists ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (groups table not found: ' . $groups_table . '); course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (groups table not found: ' . $groups_table . '); object=' . $object_id . ' blog_id=' . get_current_blog_id() );
 			}
 			return false;
 		}
 
-		// Get current course title (always fresh)
-		$course_title = get_the_title( $course_id );
-		$group_name = sprintf( __( 'Course: %s', 'tutorpress-pmpro' ), $course_title );
+		// Get current title (always fresh)
+		$title = get_the_title( $object_id );
+		// Use appropriate prefix based on post type
+		if ( 'course-bundle' === $post_type ) {
+			$group_name = sprintf( __( 'Bundle: %s', 'tutorpress-pmpro' ), $title );
+		} else {
+			$group_name = sprintf( __( 'Course: %s', 'tutorpress-pmpro' ), $title );
+		}
 
-		// Check if group already exists (stored in course meta)
-		$existing_group_id = get_post_meta( $course_id, '_tutorpress_pmpro_group_id', true );
+		// Check if group already exists (stored in post meta)
+		$existing_group_id = get_post_meta( $object_id, '_tutorpress_pmpro_group_id', true );
 		if ( $existing_group_id && function_exists( 'pmpro_get_level_group' ) ) {
 			$group = pmpro_get_level_group( $existing_group_id );
 			if ( $group ) {
-				// Sync group name with current course title (handles course renames)
+				// Sync group name with current title (handles renames)
 				if ( $group->name !== $group_name ) {
 					$wpdb->update(
 						$groups_table,
@@ -2176,55 +2199,68 @@ if ( ! defined( 'ABSPATH' ) ) {
 						array( '%d' )
 					);
 					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-						error_log( '[TP-PMPRO] get_or_create_course_level_group updated_group_name; group=' . $existing_group_id . ' old="' . $group->name . '" new="' . $group_name . '" course=' . $course_id );
+						$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+						error_log( '[TP-PMPRO] get_or_create_course_level_group updated_group_name; group=' . $existing_group_id . ' old="' . $group->name . '" new="' . $group_name . '" ' . $object_label . '=' . $object_id );
 					}
 				}
 				
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					error_log( '[TP-PMPRO] get_or_create_course_level_group found_existing_group=' . $existing_group_id . ' course=' . $course_id );
+					$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+					error_log( '[TP-PMPRO] get_or_create_course_level_group found_existing_group=' . $existing_group_id . ' ' . $object_label . '=' . $object_id );
 				}
 				return (int) $existing_group_id;
 			}
 		}
 
 		// Create new group
-		// allow_multiple_selections = false: users can only pick ONE pricing option per course
+		// allow_multiple_selections = false: users can only pick ONE pricing option per course/bundle
 		$group_id = pmpro_create_level_group( $group_name, false );
 
 		if ( $group_id ) {
-			update_post_meta( $course_id, '_tutorpress_pmpro_group_id', $group_id );
+			update_post_meta( $object_id, '_tutorpress_pmpro_group_id', $group_id );
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] get_or_create_course_level_group created_group=' . $group_id . ' name="' . $group_name . '" course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+				$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+				error_log( '[TP-PMPRO] get_or_create_course_level_group created_group=' . $group_id . ' name="' . $group_name . '" ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 			}
 			return (int) $group_id;
 		}
 
 		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-			error_log( '[TP-PMPRO] get_or_create_course_level_group failed to create group; course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+			$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+			error_log( '[TP-PMPRO] get_or_create_course_level_group failed to create group; ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 		}
 		return false;
 	}
 
 	/**
-	 * Add a membership level to the course's level group.
+	 * Add a membership level to the course's or bundle's level group.
 	 *
 	 * @since 1.6.0
-	 * @param int $course_id The course ID
-	 * @param int $level_id The level ID
+	 * @since 1.7.0 Added bundle support
+	 * @param int    $object_id The course or bundle ID
+	 * @param int    $level_id The level ID
+	 * @param string $post_type Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
 	 * @return bool True if added successfully, false otherwise
 	 */
-	public static function add_level_to_course_group( $course_id, $level_id ) {
+	public static function add_level_to_course_group( $object_id, $level_id, $post_type = null ) {
 		if ( ! function_exists( 'pmpro_add_level_to_group' ) ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] add_level_to_course_group skipped (pmpro_add_level_to_group not available); level=' . $level_id . ' course=' . $course_id );
+				$object_label = ( null !== $post_type && 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+				error_log( '[TP-PMPRO] add_level_to_course_group skipped (pmpro_add_level_to_group not available); level=' . $level_id . ' ' . $object_label . '=' . $object_id );
 			}
 			return false;
 		}
 
-		$group_id = self::get_or_create_course_level_group( $course_id );
+		// Auto-detect post type if not provided
+		if ( null === $post_type ) {
+			$post_type = get_post_type( $object_id );
+		}
+
+		$group_id = self::get_or_create_course_level_group( $object_id, $post_type );
 		if ( ! $group_id ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] add_level_to_course_group failed (no group_id); level=' . $level_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+				$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+				error_log( '[TP-PMPRO] add_level_to_course_group failed (no group_id); level=' . $level_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 		}
 			return false;
 		}
@@ -2237,16 +2273,18 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$level_id
 		) );
 		
+		$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+		
 		if ( $existing_group && (int) $existing_group !== (int) $group_id ) {
 			// Level is in a different group - remove it first
 			$wpdb->delete( $groups_levels_table, array( 'level' => $level_id ), array( '%d' ) );
 		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] add_level_to_course_group removed level from old group=' . $existing_group . '; level=' . $level_id . ' course=' . $course_id );
+				error_log( '[TP-PMPRO] add_level_to_course_group removed level from old group=' . $existing_group . '; level=' . $level_id . ' ' . $object_label . '=' . $object_id );
 			}
 		} elseif ( $existing_group && (int) $existing_group === (int) $group_id ) {
 			// Already in the correct group
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] add_level_to_course_group already in group; level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id );
+				error_log( '[TP-PMPRO] add_level_to_course_group already in group; level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id );
 		}
 			return true;
 		}
@@ -2277,22 +2315,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 				if ( $inserted ) {
 					$result = true;
 					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-						error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS (fallback direct insert); level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+						error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS (fallback direct insert); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 					}
 				} else {
 					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 						$wpdb_error = $wpdb->last_error ? $wpdb->last_error : 'none';
-						error_log( '[TP-PMPRO] add_level_to_course_group FAILED (direct insert also failed); level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() . ' wpdb_error=' . $wpdb_error );
+						error_log( '[TP-PMPRO] add_level_to_course_group FAILED (direct insert also failed); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() . ' wpdb_error=' . $wpdb_error );
 					}
 				}
 			} else {
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					error_log( '[TP-PMPRO] add_level_to_course_group FAILED (group does not exist); level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+					error_log( '[TP-PMPRO] add_level_to_course_group FAILED (group does not exist); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 				}
 			}
 		} else {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS; level=' . $level_id . ' group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+				error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS; level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 			}
 		}
 		
@@ -2301,40 +2339,44 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 
 	/**
-	 * Delete the level group for a course if it's empty.
+	 * Delete the level group for a course or bundle if it's empty.
 	 *
-	 * Called when a course is deleted or has no more levels.
+	 * Called when a course/bundle is deleted or has no more levels.
 	 *
 	 * @since 1.6.0
-	 * @param int $course_id The course ID
+	 * @since 1.7.0 Added bundle support
+	 * @param int $object_id The course or bundle ID
 	 * @return void
 	 */
-	public static function delete_course_level_group_if_empty( $course_id ) {
+	public static function delete_course_level_group_if_empty( $object_id ) {
 		if ( ! function_exists( 'pmpro_delete_level_group' ) || ! function_exists( 'pmpro_get_level_ids_for_group' ) ) {
 			return;
 		}
 
-		$group_id = get_post_meta( $course_id, '_tutorpress_pmpro_group_id', true );
+		$group_id = get_post_meta( $object_id, '_tutorpress_pmpro_group_id', true );
 		if ( ! $group_id ) {
 			return;
 		}
+
+		$post_type = get_post_type( $object_id );
+		$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
 
 		$levels_in_group = pmpro_get_level_ids_for_group( $group_id );
 		if ( empty( $levels_in_group ) ) {
 			$deleted = pmpro_delete_level_group( $group_id );
 			if ( $deleted ) {
-				delete_post_meta( $course_id, '_tutorpress_pmpro_group_id' );
+				delete_post_meta( $object_id, '_tutorpress_pmpro_group_id' );
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					error_log( '[TP-PMPRO] delete_course_level_group_if_empty deleted_group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+					error_log( '[TP-PMPRO] delete_course_level_group_if_empty deleted_group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 				}
 			} else {
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					error_log( '[TP-PMPRO] delete_course_level_group_if_empty failed to delete group=' . $group_id . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+					error_log( '[TP-PMPRO] delete_course_level_group_if_empty failed to delete group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 				}
 			}
 		} else {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] delete_course_level_group_if_empty group_not_empty=' . $group_id . ' level_count=' . count( $levels_in_group ) . ' course=' . $course_id . ' blog_id=' . get_current_blog_id() );
+				error_log( '[TP-PMPRO] delete_course_level_group_if_empty group_not_empty=' . $group_id . ' level_count=' . count( $levels_in_group ) . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 			}
 		}
 	}
