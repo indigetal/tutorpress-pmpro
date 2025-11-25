@@ -1568,17 +1568,39 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * 2. When no sale: level.initial_payment = regular_price, clear sale meta
 	 * 
 	 * This ensures PMPro charges the sale price while maintaining both prices for display.
+	 * 
+	 * Supports both courses and bundles:
+	 * - Courses: regular_price is instructor-set, sale_price is instructor-set
+	 * - Bundles: regular_price is auto-calculated (sum of course prices), sale_price is instructor-set
+	 * - Both prices stored in level meta for display (regular_price crossed out, sale_price primary)
 	 *
 	 * @since 1.5.0
-	 * @param int   $course_id      Course ID
-	 * @param int   $level_id       PMPro level ID
-	 * @param float $regular_price  Regular price for validation
+	 * @since 1.7.0 Added bundle support
+	 * @param int    $object_id     Course or bundle ID
+	 * @param int    $level_id      PMPro level ID
+	 * @param float  $regular_price Regular price for validation (auto-calculated for bundles, instructor-set for courses)
+	 * @param string $post_type     Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
 	 * @return void
 	 */
-	private function handle_sale_price_for_one_time( $course_id, $level_id, $regular_price ) {
+	private function handle_sale_price_for_one_time( $object_id, $level_id, $regular_price, $post_type = null ) {
 		if ( ! function_exists( 'update_pmpro_membership_level_meta' ) || ! function_exists( 'delete_pmpro_membership_level_meta' ) ) {
 			return;
 		}
+
+		// Auto-detect post type if not provided
+		if ( null === $post_type ) {
+			$post_type = get_post_type( $object_id );
+		}
+
+		// Validate post type
+		if ( ! in_array( $post_type, array( 'courses', 'course-bundle' ), true ) ) {
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] handle_sale_price_for_one_time skipped (invalid post_type: ' . $post_type . '); object=' . $object_id . ' level=' . $level_id );
+			}
+			return;
+		}
+
+		$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
 
 		global $wpdb;
 
@@ -1593,10 +1615,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 		);
 
 		// Store regular price in meta (for display and runtime filters to reference)
+		// For bundles: regular_price is auto-calculated sum of course prices
+		// For courses: regular_price is instructor-set
 		update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', $regular_price );
 
-		// Read sale price from course meta
-		$sale_price = get_post_meta( $course_id, 'tutor_course_sale_price', true );
+		// Read sale price from post meta (same meta key for both courses and bundles)
+		$sale_price = get_post_meta( $object_id, 'tutor_course_sale_price', true );
 		$sale_price = ! empty( $sale_price ) ? floatval( $sale_price ) : 0.0;
 
 		// Validate sale price
@@ -1604,10 +1628,23 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		if ( $is_valid_sale ) {
 			// Store sale price in meta (for runtime filters to use)
+			// Sale price is instructor-set for both courses and bundles
 			update_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', $sale_price );
 			
+			// Store reference to bundle or course (if not already set)
+			// This ensures we can identify which bundle/course this level belongs to
+			if ( 'course-bundle' === $post_type ) {
+				if ( ! get_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_id', true ) ) {
+					update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_id', $object_id );
+				}
+			} else {
+				if ( ! get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true ) ) {
+					update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $object_id );
+				}
+			}
+			
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				error_log( '[TP-PMPRO] stored_sale_price_one_time level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price );
+				error_log( '[TP-PMPRO] stored_sale_price_one_time level_id=' . $level_id . ' ' . $object_label . '=' . $object_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price );
 			}
 		} else {
 			// Sale price removed or invalid - clean up sale meta
@@ -1615,15 +1652,18 @@ if ( ! defined( 'ABSPATH' ) ) {
 			
 			if ( $sale_price > 0 ) {
 				// Log validation failure for debugging
-				$this->log( '[TP-PMPRO] invalid_sale_price level_id=' . $level_id . ' course=' . $course_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price . ' reason=sale_must_be_less_than_regular' );
+				$this->log( '[TP-PMPRO] invalid_sale_price level_id=' . $level_id . ' ' . $object_label . '=' . $object_id . ' sale_price=' . $sale_price . ' regular_price=' . $regular_price . ' reason=sale_must_be_less_than_regular' );
 			} else {
 				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-					error_log( '[TP-PMPRO] cleared_sale_price_one_time level_id=' . $level_id . ' course=' . $course_id );
+					error_log( '[TP-PMPRO] cleared_sale_price_one_time level_id=' . $level_id . ' ' . $object_label . '=' . $object_id );
 				}
 			}
 		}
 		
 		// Note: Runtime calculation happens in PaidMembershipsPro::get_active_price_for_level() and filter hooks (Step 3.4c)
+		// Both regular_price and sale_price are stored in level meta for display:
+		// - Regular price: displayed crossed out (<del>$299</del>)
+		// - Sale price: displayed as primary ($199)
 	}
 
 	/**
