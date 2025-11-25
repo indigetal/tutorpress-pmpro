@@ -39,6 +39,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * Constructor
 	 */
 	public function __construct() {
+		// Provide WooCommerce stub functions early to prevent fatal errors in Tutor LMS bundle code
+		// This must happen before Tutor LMS tries to use wc_get_product()
+		$this->provide_woocommerce_stubs();
+		
 		// Ensure Tutor LMS is active.
 		if ( ! function_exists( 'tutor' ) ) {
 			add_action( 'admin_notices', array( $this, 'notice_tutor_missing' ) );
@@ -442,6 +446,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		if ( class_exists( 'TutorPro\CourseBundle\Frontend\BundleDetails' ) ) {
 			new \TutorPro\CourseBundle\Frontend\BundleDetails();
+		}
+		if ( class_exists( 'TutorPro\CourseBundle\Frontend\BundleArchive' ) ) {
+			new \TutorPro\CourseBundle\Frontend\BundleArchive();
 		}
 		if ( class_exists( 'TutorPro\CourseBundle\Frontend\BundleBuilder' ) ) {
 			new \TutorPro\CourseBundle\Frontend\BundleBuilder();
@@ -2418,6 +2425,50 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] delete_course_level_group_if_empty group_not_empty=' . $group_id . ' level_count=' . count( $levels_in_group ) . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 			}
+		}
+	}
+
+	/**
+	 * Provide stub WooCommerce functions for Tutor LMS bundle code.
+	 * 
+	 * Tutor LMS's BundleModel calls various WooCommerce functions when monetization
+	 * is not "tutor". When PMPro is active and WooCommerce is not installed, this
+	 * causes fatal errors. We provide stub functions to prevent this.
+	 * 
+	 * This must be called early (in constructor) before Tutor LMS bundle code runs.
+	 * 
+	 * Note: We use eval() to define functions in the global namespace because:
+	 * 1. We're inside the TUTORPRESS_PMPRO namespace
+	 * 2. We can't use `namespace {}` blocks inside a method
+	 * 3. Tutor LMS calls these functions from within its own namespace, so they must
+	 *    be in the global namespace for PHP's namespace fallback to work
+	 * 
+	 * This is safe because we're only defining simple stub functions with no user input.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	private function provide_woocommerce_stubs() {
+		// Only provide stubs if WooCommerce is not active
+		if ( function_exists( '\wc_get_product' ) || class_exists( 'WooCommerce' ) ) {
+			return;
+		}
+		
+		// Define stub functions in global namespace using eval()
+		// Array format makes it easy to add more stubs in the future
+		$stubs = array(
+			'wc_get_product'                    => 'function wc_get_product( $product_id ) { return false; }',
+			'get_woocommerce_currency_symbol'  => 'function get_woocommerce_currency_symbol() { return ""; }',
+		);
+		
+		foreach ( $stubs as $function_name => $function_code ) {
+			if ( ! function_exists( '\\' . $function_name ) ) {
+				eval( 'namespace { ' . $function_code . ' }' );
+			}
+		}
+		
+		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+			error_log( '[TP-PMPRO] Provided WooCommerce stub functions: ' . implode( ', ', array_keys( $stubs ) ) );
 		}
 	}
 

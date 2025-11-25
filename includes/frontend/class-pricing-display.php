@@ -87,9 +87,12 @@ class Pricing_Display {
 		add_filter( 'tutor_course_loop_price', array( $this, 'filter_course_loop_price_pmpro' ), 12, 2 );
 		add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
 		
-		// Single course pricing
+		// Single course/bundle pricing
 		add_filter( 'tutor/course/single/entry-box/free', array( $this, 'pmpro_pricing' ), 10, 2 );
 		add_filter( 'tutor/course/single/entry-box/is_enrolled', array( $this, 'pmpro_pricing' ), 10, 2 );
+		add_filter( 'tutor/course/single/entry-box/purchasable', array( $this, 'pmpro_pricing' ), 10, 2 );
+		add_filter( 'tutor/course/single/entry-box/is_public', array( $this, 'pmpro_pricing' ), 10, 2 );
+		add_filter( 'tutor/course/single/entry-box/fully_booked', array( $this, 'pmpro_pricing' ), 10, 2 );
 		add_action( 'tutor/course/single/content/before/all', array( $this, 'pmpro_pricing_single_course' ), 100, 2 );
 		
 		// Additional pricing filters
@@ -158,19 +161,23 @@ class Pricing_Display {
 			return $html;
 		}
 
+		// Phase 3: Detect post type (course or bundle)
+		$post_type = get_post_type( $course_id );
+		$is_bundle = ( 'course-bundle' === $post_type );
+
 		// Phase 2, Step 6: Membership-only mode loop price override
 		if ( \TUTORPRESS_PMPRO\PaidMembershipsPro::tutorpress_pmpro_membership_only_enabled() ) {
-			// Respect public courses
-			if ( \TUTOR\Course_List::is_public( $course_id ) ) {
+			// Respect public courses (bundles don't have public option)
+			if ( ! $is_bundle && \TUTOR\Course_List::is_public( $course_id ) ) {
 				return $html;
 			}
 
-			// Respect free courses
+			// Respect free courses/bundles
 			if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
 				return $html;
 			}
 
-		// Keep enrollment display if user purchased this course individually (not via membership)
+		// Keep enrollment display if user purchased this course/bundle individually (not via membership)
 		if ( tutor_utils()->is_enrolled( $course_id ) && ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id ) ) {
 			return $html;
 		}
@@ -184,7 +191,8 @@ class Pricing_Display {
 			$user_has_access = $this->access_checker->has_course_access( $course_id );
 
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				error_log( '[TP-PMPRO] filter_course_loop_price_pmpro course=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
+				$object_label = $is_bundle ? 'bundle' : 'course';
+				error_log( '[TP-PMPRO] filter_course_loop_price_pmpro ' . $object_label . '=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
 			}
 
 			// Only show original HTML if user truly has access (returns exactly true)
@@ -197,27 +205,23 @@ class Pricing_Display {
 		}
 
 		// Below this point: Hybrid mode (membership-only is OFF)
-		// Respect public/free courses
-		if ( get_post_meta( $course_id, '_tutor_is_public_course', true ) === 'yes' ) {
+		// Respect public/free courses (bundles don't have public option)
+		if ( ! $is_bundle && get_post_meta( $course_id, '_tutor_is_public_course', true ) === 'yes' ) {
 			return $html;
 		}
 		if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
 			return $html;
 		}
 
-		// Check if this course has "membership" selling option - show "View Pricing" button
+		// Check if this course/bundle has "membership" selling option - show "View Pricing" button
 		$selling_option = \TUTOR\Course::get_selling_option( $course_id );
 		if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
 			return $this->render_membership_price_button( $course_id );
 		}
 
-		// Must have PMPro level associations
-		global $wpdb;
-		$has_levels = false;
-		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-			$has_levels = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) ) > 0;
-		}
-		if ( ! $has_levels ) {
+		// Phase 3: Get level IDs using bundle-specific or course-specific discovery
+		$level_ids = $this->get_level_ids_for_object( $course_id, $is_bundle );
+		if ( empty( $level_ids ) ) {
 			return $html;
 		}
 
@@ -226,7 +230,8 @@ class Pricing_Display {
 		$user_has_access = $this->access_checker->has_course_access( $course_id );
 
 		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[TP-PMPRO] filter_course_loop_price_pmpro (hybrid mode) course=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
+			$object_label = $is_bundle ? 'bundle' : 'course';
+			error_log( '[TP-PMPRO] filter_course_loop_price_pmpro (hybrid mode) ' . $object_label . '=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
 		}
 
 		if ( $user_has_access === true ) {
@@ -271,8 +276,9 @@ class Pricing_Display {
 				return $p;
 			};
 
-			$level_ids = isset( $wpdb->pmpro_memberships_pages ) ? $wpdb->get_col( $wpdb->prepare( "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) ) : array();
-			if ( is_array( $level_ids ) ) {
+			// Phase 3: Use bundle-specific or course-specific level discovery
+			$level_ids = $this->get_level_ids_for_object( $course_id, $is_bundle );
+			if ( is_array( $level_ids ) && ! empty( $level_ids ) ) {
 				foreach ( $level_ids as $lid ) {
 					$level = function_exists( 'pmpro_getLevel' ) ? pmpro_getLevel( (int) $lid ) : null;
 					if ( ! $level ) {
@@ -436,46 +442,17 @@ class Pricing_Display {
 			return $price;
 		}
 
-		// Respect free courses
+		// Phase 3: Detect post type (course or bundle)
+		$post_type = get_post_type( $course_id );
+		$is_bundle = ( 'course-bundle' === $post_type );
+
+		// Respect free courses/bundles
 		if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
 			return $price;
 		}
 
-		// Get course-specific levels (check multiple sources)
-		global $wpdb;
-		$level_ids = array();
-
-		// Primary: pmpro_memberships_pages table
-		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-			$level_ids = $wpdb->get_col(
-				$wpdb->prepare(
-					"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
-					$course_id
-				)
-			);
-		}
-
-		// Secondary: course meta
-		$meta_ids = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
-		if ( is_array( $meta_ids ) && ! empty( $meta_ids ) ) {
-			$level_ids = array_merge( $level_ids, $meta_ids );
-		}
-
-		// Tertiary: reverse meta lookup (tutorpress_course_id)
-		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
-			$reverse_ids = $wpdb->get_col(
-				$wpdb->prepare(
-					"SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
-					'tutorpress_course_id',
-					(string) $course_id
-				)
-			);
-			$level_ids = array_merge( $level_ids, $reverse_ids );
-		}
-
-		// Remove duplicates and ensure integers
-		$level_ids = array_map( 'intval', array_unique( $level_ids ) );
-		$level_ids = array_filter( $level_ids ); // Remove zeros
+		// Phase 3: Get level IDs using bundle-specific or course-specific discovery
+		$level_ids = $this->get_level_ids_for_object( $course_id, $is_bundle );
 
 		if ( empty( $level_ids ) ) {
 			return $price;
@@ -612,7 +589,11 @@ class Pricing_Display {
 	 * @return string Modified enrollment box HTML.
 	 */
 	public function pmpro_pricing( $html, $course_id ) {
-		// Phase 2 Fix: Free courses should ALWAYS show their normal "Free" enrollment box
+		// Phase 3: Detect post type (course or bundle)
+		$post_type = get_post_type( $course_id );
+		$is_bundle = ( 'course-bundle' === $post_type );
+
+		// Phase 2 Fix: Free courses/bundles should ALWAYS show their normal "Free" enrollment box
 		// regardless of membership-only mode status
 		$is_free = get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free';
 		if ( $is_free ) {
@@ -622,12 +603,13 @@ class Pricing_Display {
 		$is_enrolled = tutor_utils()->is_enrolled();
 
 		// Phase 3, Step 3.2: Use our unified access check for consistency
-		// This checks full-site, category-wise, AND course-specific levels
+		// This checks full-site, category-wise, AND course/bundle-specific levels
 		$has_course_access = $this->access_checker->has_course_access( $course_id, get_current_user_id() );
 
 		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			$object_label = $is_bundle ? 'bundle' : 'course';
 			$access_type = $has_course_access === true ? 'TRUE' : ( is_array( $has_course_access ) ? 'ARRAY' : 'FALSE' );
-			error_log( '[TP-PMPRO] pmpro_pricing course=' . $course_id . ' user=' . get_current_user_id() . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' has_access=' . $access_type );
+			error_log( '[TP-PMPRO] pmpro_pricing ' . $object_label . '=' . $course_id . ' user=' . get_current_user_id() . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' has_access=' . $access_type );
 		}
 
 		// Convert to boolean (our method may return array of required levels)
@@ -670,7 +652,14 @@ class Pricing_Display {
 			}
 		} else {
 			// Phase 2: In hybrid mode, determine which levels to show based on selling option
-			$selling_option = \TUTOR\Course::get_selling_option( $course_id );
+			// Phase 3: For courses, use Course::get_selling_option(); for bundles, read directly from meta
+			if ( ! $is_bundle ) {
+				// Course: use Tutor LMS helper method
+				$selling_option = \TUTOR\Course::get_selling_option( $course_id );
+			} else {
+				// Bundle: read selling option directly from meta (Course::get_selling_option() is course-specific)
+				$selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
+			}
 
 			if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
 				// For 'membership' selling option, show full-site membership levels
@@ -690,19 +679,10 @@ class Pricing_Display {
 					return $html;
 				}
 			} elseif ( \TUTOR\Course::SELLING_OPTION_ALL === $selling_option ) {
-				// For 'all' selling option, show ALL levels: course-specific (one-time + subscription) + full-site membership
+				// For 'all' selling option, show ALL levels: course/bundle-specific (one-time + subscription) + full-site membership
 
-				// Get ALL course-specific levels
-				global $wpdb;
-				$course_level_ids = array();
-				if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-					$course_level_ids = $wpdb->get_col(
-						$wpdb->prepare(
-							"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
-							$course_id
-						)
-					);
-				}
+				// Phase 3: Get ALL course/bundle-specific levels using helper method
+				$course_level_ids = $this->get_level_ids_for_object( $course_id, $is_bundle );
 
 				// Get full-site membership levels
 				$full_site_level_ids = \TUTORPRESS_PMPRO\PaidMembershipsPro::pmpro_get_active_full_site_levels();
@@ -724,23 +704,23 @@ class Pricing_Display {
 				}
 			} else {
 				// For other selling options (one_time, subscription, both),
-				// show COURSE-SPECIFIC PMPro levels (exclude full-site membership levels)
+				// show COURSE/BUNDLE-SPECIFIC PMPro levels (exclude full-site membership levels)
 
-				// Get ALL levels associated with this course via pmpro_memberships_pages
-				global $wpdb;
-				$level_ids = array();
-				if ( isset( $wpdb->pmpro_memberships_pages ) ) {
-					$level_ids = $wpdb->get_col(
-						$wpdb->prepare(
-							"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
-							$course_id
-						)
-					);
-				}
+				// Phase 3: Get level IDs using bundle-specific or course-specific discovery
+				$level_ids = $this->get_level_ids_for_object( $course_id, $is_bundle );
 
 				if ( empty( $level_ids ) ) {
 					// No PMPro level associations found, return original HTML
+					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+						$object_label = $is_bundle ? 'bundle' : 'course';
+						error_log( '[TP-PMPRO] pmpro_pricing no_levels_found ' . $object_label . '=' . $course_id . ' selling_option=' . $selling_option );
+					}
 					return $html;
+				}
+
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					$object_label = $is_bundle ? 'bundle' : 'course';
+					error_log( '[TP-PMPRO] pmpro_pricing found_levels ' . $object_label . '=' . $course_id . ' level_count=' . count( $level_ids ) . ' level_ids=' . implode( ',', $level_ids ) );
 				}
 
 				// Get full level objects
@@ -781,17 +761,30 @@ class Pricing_Display {
 		}
 
 		// Calculate active prices for all levels (Step 3.4b: Dynamic Pricing)
-	// This ensures frontend displays reflect real-time sale status with zero delay
-	foreach ( $required_levels as &$level ) {
-		// Get active price (accounts for sale schedule)
-		$active_price = $this->sale_price_handler->get_active_price_for_level( $level->id );
+		// This ensures frontend displays reflect real-time sale status with zero delay
+		foreach ( $required_levels as &$level ) {
+			// Get active price (accounts for sale schedule)
+			$active_price = $this->sale_price_handler->get_active_price_for_level( $level->id );
 
 			// Attach active price data to level object for template use
 			$level->active_price          = $active_price['price'];
 			$level->regular_price_display = $active_price['regular_price'];
 			$level->is_on_sale            = $active_price['on_sale'];
+
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				$object_label = $is_bundle ? 'bundle' : 'course';
+				error_log( '[TP-PMPRO] pmpro_pricing level_price level_id=' . $level->id . ' ' . $object_label . '=' . $course_id . ' active_price=' . $level->active_price . ' regular_price=' . $level->regular_price_display . ' on_sale=' . ( $level->is_on_sale ? 'yes' : 'no' ) );
+			}
 		}
 		unset( $level ); // Break reference
+
+		if ( empty( $required_levels ) ) {
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				$object_label = $is_bundle ? 'bundle' : 'course';
+				error_log( '[TP-PMPRO] pmpro_pricing empty_required_levels ' . $object_label . '=' . $course_id );
+			}
+			return $html;
+		}
 
 		// Render membership pricing template with the appropriate levels
 		$level_page_id  = apply_filters( 'TUTORPRESS_PMPRO_level_page_id', pmpro_getOption( 'levels_page_id' ) );
@@ -966,5 +959,59 @@ class Pricing_Display {
 		// For course pages, always return full content (bypass PMPro restriction)
 		// Course content (lessons/quizzes) will still be restricted because they're different post types
 		return $content;
+	}
+
+	/**
+	 * Get PMPro level IDs for a course or bundle.
+	 *
+	 * Phase 3: Helper method to discover PMPro levels associated with a course or bundle.
+	 * Uses bundle-specific meta key (tutorpress_bundle_id) for bundles and course-specific
+	 * meta key (tutorpress_course_id) for courses.
+	 *
+	 * @since 1.0.0
+	 * @param int  $object_id Course or bundle post ID.
+	 * @param bool $is_bundle Whether the object is a bundle (true) or course (false).
+	 * @return array Array of PMPro level IDs.
+	 */
+	private function get_level_ids_for_object( $object_id, $is_bundle = false ) {
+		global $wpdb;
+		$level_ids = array();
+
+		// Primary: pmpro_memberships_pages table (works for both courses and bundles)
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$level_ids = $wpdb->get_col(
+				$wpdb->prepare(
+					"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
+					$object_id
+				)
+			);
+		}
+
+		// Secondary: post meta (_tutorpress_pmpro_levels) - same for both courses and bundles
+		$meta_ids = get_post_meta( $object_id, '_tutorpress_pmpro_levels', true );
+		if ( is_array( $meta_ids ) && ! empty( $meta_ids ) ) {
+			$level_ids = array_merge( $level_ids, $meta_ids );
+		}
+
+		// Tertiary: reverse meta lookup
+		// For bundles: use tutorpress_bundle_id
+		// For courses: use tutorpress_course_id
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$meta_key = $is_bundle ? 'tutorpress_bundle_id' : 'tutorpress_course_id';
+			$reverse_ids = $wpdb->get_col(
+				$wpdb->prepare(
+					"SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
+					$meta_key,
+					(string) $object_id
+				)
+			);
+			$level_ids = array_merge( $level_ids, $reverse_ids );
+		}
+
+		// Remove duplicates and ensure integers
+		$level_ids = array_map( 'intval', array_unique( $level_ids ) );
+		$level_ids = array_filter( $level_ids ); // Remove zeros
+
+		return $level_ids;
 	}
 }

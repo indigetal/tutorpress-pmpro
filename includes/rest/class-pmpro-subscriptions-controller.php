@@ -25,7 +25,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 *
 	 * @var string
 	 */
-	protected $namespace = 'tutorpress-pmpro/v1';
+	protected $namespace = 'tutorpress/v1';
 
 	/**
 	 * Constructor.
