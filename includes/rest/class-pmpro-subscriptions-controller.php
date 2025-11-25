@@ -21,6 +21,13 @@ if ( file_exists( __DIR__ . '/../utilities/class-pmpro-association.php' ) ) {
 class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controller {
 
 	/**
+	 * The namespace for our REST API endpoints.
+	 *
+	 * @var string
+	 */
+	protected $namespace = 'tutorpress-pmpro/v1';
+
+	/**
 	 * Constructor.
 	 */
 	public function __construct() {
@@ -370,6 +377,46 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 
+		// Filter plans by the bundle's current selling_option (if applicable)
+		$selling_option = get_post_meta( $bundle_id, 'tutor_course_selling_option', true );
+		$this->log( '[TP-PMPRO] get_bundle_subscriptions filter: bundle=' . $bundle_id . ' selling_option=' . ( $selling_option ? $selling_option : 'empty' ) . ' plans_before_filter=' . count( $plans ) );
+		if ( ! empty( $plans ) && ! empty( $selling_option ) ) {
+			// Filter based on selling_option: only include matching payment types
+			$plans = array_filter( $plans, function( $plan ) use ( $selling_option ) {
+				$plan_type = isset( $plan['payment_type'] ) ? $plan['payment_type'] : 'recurring';
+				$match = false;
+				if ( 'one_time' === $selling_option ) {
+					// Only show one-time plans
+					$match = 'one_time' === $plan_type;
+				} elseif ( 'subscription' === $selling_option ) {
+					// Only show recurring plans
+					$match = 'recurring' === $plan_type;
+				} else {
+					// 'both' or other: show all plans
+					$match = true;
+				}
+				$this->log( '[TP-PMPRO] get_bundle_subscriptions filter_item: plan_id=' . ( isset( $plan['id'] ) ? $plan['id'] : 'unknown' ) . ' plan_type=' . $plan_type . ' selling_option=' . $selling_option . ' match=' . ( $match ? 'yes' : 'no' ) );
+				return $match;
+			} );
+			// Re-index array to ensure clean structure
+			$plans = array_values( $plans );
+		}
+		$this->log( '[TP-PMPRO] get_bundle_subscriptions filter: plans_after_filter=' . count( $plans ) );
+
+		// If bundle is not published, also include any pending (queued) plans stored in meta
+		$status = get_post_status( (int) $bundle_id );
+		if ( 'publish' !== $status ) {
+			$pending = get_post_meta( $bundle_id, '_tutorpress_pmpro_pending_plans', true );
+			if ( is_array( $pending ) && ! empty( $pending ) ) {
+				$mapper = isset( $mapper ) ? $mapper : new \TutorPress_PMPro_Mapper();
+				foreach ( $pending as $pp ) {
+					$ui = $mapper->map_pmpro_to_ui( (object) array_merge( array( 'id' => 0 ), $mapper->map_ui_to_pmpro( (array) $pp ) ) );
+					if ( is_array( $ui ) ) { $ui['queued'] = true; $ui['status'] = 'pending_publish'; }
+					$plans[] = $ui;
+				}
+			}
+		}
+
 		// Add membership mode metadata for frontend (Phase 3 integration)
 		$metadata = array(
 			'has_full_site_levels' => false,
@@ -412,7 +459,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return new WP_Error( 'missing_object_id', __( 'Object ID is required (course_id or object_id).', 'tutorpress-pmpro' ), [ 'status' => 400 ] );
 		}
 
-		$validation = TutorPress_Subscription_Utils::validate_course_id( $object_id );
+		// Detect post type and get appropriate validation
+		$object_info = $this->detect_object_type( $object_id );
+		$validation = call_user_func( $object_info['validate'], $object_id );
 		if ( is_wp_error( $validation ) ) {
 			return $validation;
 		}
@@ -435,7 +484,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			$queued_level = (object) array_merge( array( 'id' => 0 ), $level_data );
 			$payload = $mapper->map_pmpro_to_ui( $queued_level );
 			if ( is_array( $payload ) ) { $payload['queued'] = true; $payload['status'] = 'pending_publish'; }
-			return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'Plan queued: course is not published. Levels will be created on publish.', 'tutorpress-pmpro' ) ) );
+			$object_label = $object_info['label'];
+			return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, sprintf( __( 'Plan queued: %s is not published. Levels will be created on publish.', 'tutorpress-pmpro' ), $object_label ) ) );
 		}
 
 		if ( ! function_exists( 'pmpro_insert_or_replace' ) && ! class_exists( 'PMPro_Membership_Level' ) ) {
@@ -464,12 +514,12 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			$db_level_data['billing_limit'] = 0;
 		}
 
-		// Ensure level has a usable name for one-time plans only: prefer provided name, fall back to course title
+		// Ensure level has a usable name for one-time plans only: prefer provided name, fall back to object title
 		$object_id_for_name = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
 		if ( empty( $db_level_data['name'] ) && 'one_time' === $payment_type ) {
-			$course_title = $object_id_for_name ? get_the_title( $object_id_for_name ) : '';
-			if ( $course_title ) {
-				$db_level_data['name'] = sanitize_text_field( sprintf( '%s (One-time)', $course_title ) );
+			$object_title = $object_id_for_name ? get_the_title( $object_id_for_name ) : '';
+			if ( $object_title ) {
+				$db_level_data['name'] = sanitize_text_field( sprintf( '%s (One-time)', $object_title ) );
 			} else {
 				$db_level_data['name'] = sprintf( 'One-time plan for %s', $object_id_for_name ? $object_id_for_name : 'site' );
 			}
@@ -508,15 +558,15 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
 			}
 
-			// Set reverse lookup on PMPro level meta
+			// Set reverse lookup on PMPro level meta (use appropriate meta key based on post type)
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-				update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $object_id );
+				update_pmpro_membership_level_meta( $level_id, $object_info['meta_key'], $object_id );
 				update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
 			} else {
 				// Fallback: try PMPro meta function names or generic postmeta on pmpro level table
 				try {
 					if ( function_exists( 'add_pmpro_membership_level_meta' ) ) {
-						add_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $object_id );
+						add_pmpro_membership_level_meta( $level_id, $object_info['meta_key'], $object_id );
 						add_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
 					}
 				} catch ( Exception $e ) {
@@ -524,10 +574,13 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				}
 			}
 
-			// Phase 5: Add level to course group
+			// Phase 5: Add level to course/bundle group
 			if ( class_exists( '\\TUTORPRESS_PMPRO\\Init' ) ) {
-				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $level_id );
+				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $level_id, $object_info['post_type'] );
 			}
+			
+			// Note: Sale price handling for one-time purchases happens in reconciliation logic
+			// (reconcile_course_levels/reconcile_bundle_levels calls handle_sale_price_for_one_time)
 
 			// Persist any UI-only meta (sale_price etc.) if present in mapper output
 			if ( isset( $level_data['meta'] ) && is_array( $level_data['meta'] ) ) {
@@ -602,7 +655,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		// Publish guard: if an object_id/course_id is provided and not published, skip PMPro updates
 		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
+		$object_info = null;
 		if ( $object_id ) {
+			$object_info = $this->detect_object_type( $object_id );
 			$status = get_post_status( (int) $object_id );
 			if ( 'publish' !== $status ) {
 				// Return a UI-shaped payload to keep editor stable, marked as queued
@@ -611,7 +666,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				$queued_level = (object) array_merge( (array) $level, $incoming );
 				$payload = $mapper->map_pmpro_to_ui( $queued_level );
 				if ( is_array( $payload ) ) { $payload['queued'] = true; $payload['status'] = 'pending_publish'; }
-				return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'Plan update queued: course is not published. Updates will apply on publish.', 'tutorpress-pmpro' ) ) );
+				$object_label = $object_info['label'];
+				return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, sprintf( __( 'Plan update queued: %s is not published. Updates will apply on publish.', 'tutorpress-pmpro' ), $object_label ) ) );
 			}
 		}
 
@@ -644,9 +700,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
                 $update_data['billing_amount'] = floatval( $request->get_param( 'recurring_price' ) );
             }
 
-            // Ensure PMPro association row (pmpro_memberships_pages) exists for the course
-            if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
-                \TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
+            // Ensure PMPro association row (pmpro_memberships_pages) exists for the course/bundle
+            if ( $object_id && class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+                \TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $plan_id );
             }
         }
 		if ( $request->has_param( 'recurring_value' ) ) {
@@ -685,9 +741,14 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		// Optionally update mapping (course/bundle association)
 		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
         if ( $object_id ) {
-			// Ensure the level meta is set
+			// Detect post type if not already detected
+			if ( ! $object_info ) {
+				$object_info = $this->detect_object_type( $object_id );
+			}
+			
+			// Ensure the level meta is set (use appropriate meta key based on post type)
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-				update_pmpro_membership_level_meta( $plan_id, 'tutorpress_course_id', intval( $object_id ) );
+				update_pmpro_membership_level_meta( $plan_id, $object_info['meta_key'], intval( $object_id ) );
 			}
             // Ensure association exists
             if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
@@ -838,13 +899,22 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		// Attach to course/bundle if provided
 		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
 		if ( $object_id ) {
+			$object_info = $this->detect_object_type( $object_id );
 			$meta_key = '_tutorpress_pmpro_levels';
 			$existing = get_post_meta( $object_id, $meta_key, true );
 			if ( ! is_array( $existing ) ) $existing = array();
 			$existing[] = $new_id;
 			update_post_meta( $object_id, $meta_key, array_values( array_unique( $existing ) ) );
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-				update_pmpro_membership_level_meta( $new_id, 'tutorpress_course_id', $object_id );
+				update_pmpro_membership_level_meta( $new_id, $object_info['meta_key'], $object_id );
+			}
+			// Ensure association exists
+			if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
+				\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $new_id );
+			}
+			// Add to level group
+			if ( class_exists( '\\TUTORPRESS_PMPRO\\Init' ) ) {
+				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $new_id, $object_info['post_type'] );
 			}
 		}
 
@@ -868,22 +938,57 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return new WP_Error( 'invalid_params', __( 'object_id and ordered_ids are required.', 'tutorpress-pmpro' ), [ 'status' => 400 ] );
 		}
 
+		// Detect post type and get appropriate meta key
+		$object_info = $this->detect_object_type( $object_id );
+
         // Sanitize IDs
 		$ordered_ids = array_values( array_filter( array_map( 'absint', $ordered_ids ) ) );
 
-		// Best-effort: ensure reverse meta
+		// Best-effort: ensure reverse meta (use appropriate meta key based on post type)
         if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 			foreach ( $ordered_ids as $lid ) {
-				update_pmpro_membership_level_meta( $lid, 'tutorpress_course_id', $object_id );
+				update_pmpro_membership_level_meta( $lid, $object_info['meta_key'], $object_id );
 			}
 		}
 
         // Sync associations to match the ordered IDs
         if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
             \TUTORPRESS_PMPRO\PMPro_Association::sync_course_level_associations( $object_id, $ordered_ids );
-        }
+		}
 
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $ordered_ids, __( 'Subscription plans reordered.', 'tutorpress-pmpro' ) ) );
+	}
+
+	/**
+	 * Detect post type and get appropriate validation function for an object ID.
+	 *
+	 * @since 1.7.0
+	 * @param int $object_id The course or bundle ID.
+	 * @return array {
+	 *     @type string   $post_type Post type ('courses' or 'course-bundle').
+	 *     @type callable $validate  Validation function to call.
+	 *     @type string   $meta_key  Meta key for level association ('tutorpress_course_id' or 'tutorpress_bundle_id').
+	 * }
+	 */
+	private function detect_object_type( $object_id ) {
+		$post_type = get_post_type( $object_id );
+		
+		if ( 'course-bundle' === $post_type ) {
+			return array(
+				'post_type' => 'course-bundle',
+				'validate'  => array( 'TutorPress_Subscription_Utils', 'validate_bundle_id' ),
+				'meta_key'  => 'tutorpress_bundle_id',
+				'label'     => 'bundle',
+			);
+		}
+		
+		// Default to course
+		return array(
+			'post_type' => 'courses',
+			'validate'  => array( 'TutorPress_Subscription_Utils', 'validate_course_id' ),
+			'meta_key'  => 'tutorpress_course_id',
+			'label'     => 'course',
+		);
 	}
 
 	/**
