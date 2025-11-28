@@ -87,6 +87,12 @@ class Pricing_Display {
 		add_filter( 'tutor_course_loop_price', array( $this, 'filter_course_loop_price_pmpro' ), 12, 2 );
 		add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
 		
+		// Phase 4: Alter bundle enrollment status for entry box
+		add_filter( 'tutor_alter_enroll_status', array( $this, 'alter_bundle_enroll_status' ), 10, 1 );
+		
+		// Phase 4: Override Tutor Pro's bundle enrolled content to fix anchor link
+		add_filter( 'tutor/course/single/entry-box/is_enrolled', array( $this, 'fix_bundle_enrolled_content' ), 11, 2 );
+		
 		// Single course/bundle pricing
 		add_filter( 'tutor/course/single/entry-box/free', array( $this, 'pmpro_pricing' ), 10, 2 );
 		add_filter( 'tutor/course/single/entry-box/is_enrolled', array( $this, 'pmpro_pricing' ), 10, 2 );
@@ -118,6 +124,71 @@ class Pricing_Display {
 		if ( function_exists( 'is_single_course' ) && is_single_course() ) {
 			wp_enqueue_style( 'tutorpress-pmpro-pricing', TUTORPRESS_PMPRO()->url . 'assets/css/pricing.css', array(), TUTORPRESS_PMPRO_VERSION );
 		}
+	}
+
+	/**
+	 * Alter enrollment status for bundles.
+	 *
+	 * Phase 4: For bundles, check if user is enrolled in all bundle courses via PMPro.
+	 * This allows the entry box template to display enrollment info correctly.
+	 *
+	 * @since 1.0.0
+	 * @param bool $is_enrolled Current enrollment status.
+	 * @return bool Modified enrollment status.
+	 */
+	public function alter_bundle_enroll_status( $is_enrolled ) {
+		// Only run on single bundle pages
+		if ( ! is_singular( 'course-bundle' ) ) {
+			return $is_enrolled;
+		}
+
+		$bundle_id = get_the_ID();
+		if ( ! $bundle_id ) {
+			return $is_enrolled;
+		}
+
+		// Check if user is enrolled in bundle via PMPro
+		$bundle_enrolled = $this->is_user_enrolled_in_bundle( $bundle_id, get_current_user_id() );
+
+		// If enrolled via PMPro, return true to show enrollment info
+		if ( $bundle_enrolled ) {
+			return true;
+		}
+
+		return $is_enrolled;
+	}
+
+	/**
+	 * Fix bundle enrolled content to use correct anchor link.
+	 *
+	 * Phase 4: Tutor Pro's content_for_enrolled_user checks tutor_utils()->is_enrolled()
+	 * which returns FALSE for bundles, causing the link to be just "#". We override this
+	 * to provide the correct link with #tutor-bundle-course-list anchor.
+	 *
+	 * @since 1.0.0
+	 * @param string $content Current content.
+	 * @param int    $post_id Bundle ID.
+	 * @return string Modified content.
+	 */
+	public function fix_bundle_enrolled_content( $content, $post_id ) {
+		// Only run for bundles
+		if ( 'course-bundle' !== get_post_type( $post_id ) ) {
+			return $content;
+		}
+
+		// Only run if user is enrolled via PMPro
+		if ( ! $this->is_user_enrolled_in_bundle( $post_id, get_current_user_id() ) ) {
+			return $content;
+		}
+
+		// Check if content has the incorrect link (href="#")
+		if ( strpos( $content, 'href="#"' ) !== false ) {
+			// Replace with correct anchor link
+			$correct_link = get_the_permalink( $post_id ) . '#tutor-bundle-course-list';
+			$content = str_replace( 'href="#"', 'href="' . esc_url( $correct_link ) . '"', $content );
+		}
+
+		return $content;
 	}
 
 	/**
@@ -165,6 +236,25 @@ class Pricing_Display {
 		$post_type = get_post_type( $course_id );
 		$is_bundle = ( 'course-bundle' === $post_type );
 
+		// Phase 4: Check bundle enrollment BEFORE mode-specific logic (works in both membership-only and hybrid modes)
+		// For bundles, check if enrolled via PMPro (bundles don't have direct enrollment records)
+		if ( $is_bundle ) {
+			$bundle_enrolled = $this->is_user_enrolled_in_bundle( $course_id, get_current_user_id() );
+			if ( $bundle_enrolled ) {
+				// User is enrolled in bundle via PMPro - return "Bundle Details" button
+				// This matches Tutor's behavior for enrolled courses (shows "Continue Learning" button)
+				ob_start();
+				?>
+				<div class="list-item-button">
+					<a href="<?php echo esc_url( get_the_permalink( $course_id ) . '#tutor-bundle-course-list' ); ?>" class="tutor-btn tutor-btn-outline-primary tutor-btn-md tutor-btn-block">
+						<?php esc_html_e( 'Bundle Details', 'tutorpress-pmpro' ); ?>
+					</a>
+				</div>
+				<?php
+				return ob_get_clean();
+			}
+		}
+
 		// Phase 2, Step 6: Membership-only mode loop price override
 		if ( \TUTORPRESS_PMPRO\PaidMembershipsPro::tutorpress_pmpro_membership_only_enabled() ) {
 			// Respect public courses (bundles don't have public option)
@@ -177,10 +267,11 @@ class Pricing_Display {
 				return $html;
 			}
 
-		// Keep enrollment display if user purchased this course/bundle individually (not via membership)
-		if ( tutor_utils()->is_enrolled( $course_id ) && ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id ) ) {
-			return $html;
-		}
+			// Keep enrollment display if user purchased this course individually (not via membership)
+			$is_enrolled = tutor_utils()->is_enrolled( $course_id );
+			if ( $is_enrolled && ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id ) ) {
+				return $html;
+			}
 
 			// For all other cases in membership-only mode, show "View Pricing" button
 			// This includes: logged-out users, users without membership, users without access
@@ -189,11 +280,6 @@ class Pricing_Display {
 			// - false if no membership required (shouldn't happen in membership-only mode)
 			// - array of required levels if user doesn't have access
 			$user_has_access = $this->access_checker->has_course_access( $course_id );
-
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				$object_label = $is_bundle ? 'bundle' : 'course';
-				error_log( '[TP-PMPRO] filter_course_loop_price_pmpro ' . $object_label . '=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
-			}
 
 			// Only show original HTML if user truly has access (returns exactly true)
 			if ( $user_has_access === true ) {
@@ -228,11 +314,6 @@ class Pricing_Display {
 		// Phase 1, Step 1.1 Extension: Check if user has access via any membership type
 		// If user has access, return original HTML (don't show pricing)
 		$user_has_access = $this->access_checker->has_course_access( $course_id );
-
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			$object_label = $is_bundle ? 'bundle' : 'course';
-			error_log( '[TP-PMPRO] filter_course_loop_price_pmpro (hybrid mode) ' . $object_label . '=' . $course_id . ' user=' . get_current_user_id() . ' has_access=' . ( $user_has_access === true ? 'TRUE' : ( is_array( $user_has_access ) ? 'ARRAY' : 'FALSE' ) ) );
-		}
 
 		if ( $user_has_access === true ) {
 			return $html;
@@ -290,10 +371,6 @@ class Pricing_Display {
 				$init              = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : ( isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0 );
 				$is_on_sale        = ! empty( $active_price_data['on_sale'] );
 				$regular_price     = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $init;
-
-					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-						error_log( '[TP-PMPRO] Level ID=' . $lid . ' init=' . $init . ' is_on_sale=' . ( $is_on_sale ? 'yes' : 'no' ) . ' regular=' . $regular_price );
-					}
 
 					$bill  = isset( $level->billing_amount ) ? (float) $level->billing_amount : 0.0;
 					$cycle = isset( $level->cycle_number ) ? (int) $level->cycle_number : 0;
@@ -355,13 +432,6 @@ class Pricing_Display {
 					// Multiple pricing options - find the minimum and show it with "Starting at"
 					$min       = min( $numeric_amounts );
 					$min_index = array_search( $min, $numeric_amounts );
-
-					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-						error_log( '[TP-PMPRO] Multiple plans - course_id=' . $course_id );
-						error_log( '[TP-PMPRO] numeric_amounts: ' . print_r( $numeric_amounts, true ) );
-						error_log( '[TP-PMPRO] amount_strings: ' . print_r( $amount_strings, true ) );
-						error_log( '[TP-PMPRO] min=' . $min . ', min_index=' . $min_index );
-					}
 
 					// Use the full price string (with sale if applicable) for the minimum price
 					$min_price_display = isset( $amount_strings[ $min_index ] ) ? $amount_strings[ $min_index ] : $fmt( $min );
@@ -562,10 +632,6 @@ class Pricing_Display {
 		$is_enrolled        = tutor_utils()->is_enrolled( $course_id, get_current_user_id() );
 		$is_preview_enabled = tutor()->lesson_post_type === get_post_type( $content_id ) ? (bool) get_post_meta( $content_id, '_is_preview', true ) : false;
 
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[TP-PMPRO] pmpro_pricing_single_course course=' . $course_id . ' content=' . $content_id . ' user=' . get_current_user_id() . ' has_access=' . ( $has_course_access ? 'yes' : 'no' ) . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' is_preview=' . ( $is_preview_enabled ? 'yes' : 'no' ) );
-		}
-
 		// @since v2.0.7 If user has access to the content, allow access; otherwise redirect to course page
 		if ( $has_course_access || $is_enrolled || $is_preview_enabled ) {
 			return;
@@ -601,16 +667,20 @@ class Pricing_Display {
 		}
 
 		$is_enrolled = tutor_utils()->is_enrolled();
+		
+		// Phase 4: For bundles, check if enrolled via PMPro membership
+		// Note: tutor_alter_enroll_status handles the entry box template, but pmpro_pricing filters
+		// need to check enrollment directly since they run in different contexts
+		if ( $is_bundle ) {
+			$bundle_enrolled = $this->is_user_enrolled_in_bundle( $course_id, get_current_user_id() );
+			if ( $bundle_enrolled ) {
+				$is_enrolled = true;
+			}
+		}
 
 		// Phase 3, Step 3.2: Use our unified access check for consistency
 		// This checks full-site, category-wise, AND course/bundle-specific levels
 		$has_course_access = $this->access_checker->has_course_access( $course_id, get_current_user_id() );
-
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			$object_label = $is_bundle ? 'bundle' : 'course';
-			$access_type = $has_course_access === true ? 'TRUE' : ( is_array( $has_course_access ) ? 'ARRAY' : 'FALSE' );
-			error_log( '[TP-PMPRO] pmpro_pricing ' . $object_label . '=' . $course_id . ' user=' . get_current_user_id() . ' is_enrolled=' . ( $is_enrolled ? 'yes' : 'no' ) . ' has_access=' . $access_type );
-		}
 
 		// Convert to boolean (our method may return array of required levels)
 		$has_course_access = ( $has_course_access === true );
@@ -627,10 +697,6 @@ class Pricing_Display {
 
 		// Determine which levels to show based on membership-only mode
 		$membership_only_enabled = \TUTORPRESS_PMPRO\PaidMembershipsPro::tutorpress_pmpro_membership_only_enabled();
-
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[TP-PMPRO] pmpro_pricing continuing to show levels, membership_only=' . ( $membership_only_enabled ? 'yes' : 'no' ) );
-		}
 
 		if ( $membership_only_enabled ) {
 			// Phase 2: In membership-only mode, show ALL full-site membership levels
@@ -711,16 +777,7 @@ class Pricing_Display {
 
 				if ( empty( $level_ids ) ) {
 					// No PMPro level associations found, return original HTML
-					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-						$object_label = $is_bundle ? 'bundle' : 'course';
-						error_log( '[TP-PMPRO] pmpro_pricing no_levels_found ' . $object_label . '=' . $course_id . ' selling_option=' . $selling_option );
-					}
 					return $html;
-				}
-
-				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-					$object_label = $is_bundle ? 'bundle' : 'course';
-					error_log( '[TP-PMPRO] pmpro_pricing found_levels ' . $object_label . '=' . $course_id . ' level_count=' . count( $level_ids ) . ' level_ids=' . implode( ',', $level_ids ) );
 				}
 
 				// Get full level objects
@@ -770,19 +827,10 @@ class Pricing_Display {
 			$level->active_price          = $active_price['price'];
 			$level->regular_price_display = $active_price['regular_price'];
 			$level->is_on_sale            = $active_price['on_sale'];
-
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				$object_label = $is_bundle ? 'bundle' : 'course';
-				error_log( '[TP-PMPRO] pmpro_pricing level_price level_id=' . $level->id . ' ' . $object_label . '=' . $course_id . ' active_price=' . $level->active_price . ' regular_price=' . $level->regular_price_display . ' on_sale=' . ( $level->is_on_sale ? 'yes' : 'no' ) );
-			}
 		}
 		unset( $level ); // Break reference
 
 		if ( empty( $required_levels ) ) {
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				$object_label = $is_bundle ? 'bundle' : 'course';
-				error_log( '[TP-PMPRO] pmpro_pricing empty_required_levels ' . $object_label . '=' . $course_id );
-			}
 			return $html;
 		}
 
@@ -959,6 +1007,212 @@ class Pricing_Display {
 		// For course pages, always return full content (bypass PMPro restriction)
 		// Course content (lessons/quizzes) will still be restricted because they're different post types
 		return $content;
+	}
+
+	/**
+	 * Check if user is enrolled in a bundle via PMPro membership.
+	 *
+	 * Phase 4: Helper method to verify bundle enrollment status.
+	 * Checks if user is enrolled in all courses within the bundle with PMPro membership flag.
+	 *
+	 * Handles both new and retroactive enrollments:
+	 * - New enrollments: checks for _tutorpress_pmpro_membership_enrollment meta
+	 * - Retroactive enrollments: checks for _tutor_pmpro_level_id meta (set on checkout)
+	 *
+	 * @since 1.0.0
+	 * @param int $bundle_id Bundle post ID.
+	 * @param int|null $user_id User ID (defaults to current user).
+	 * @return bool True if enrolled in bundle via PMPro membership, false otherwise.
+	 */
+	private function is_user_enrolled_in_bundle( $bundle_id, $user_id = null ) {
+		if ( ! $user_id ) {
+			$user_id = get_current_user_id();
+		}
+
+		if ( ! $user_id || ! function_exists( 'tutor_utils' ) ) {
+			return false;
+		}
+
+		// Bundles don't exist without BundleModel
+		if ( ! class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
+			return false;
+		}
+
+		$course_ids = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_course_ids( $bundle_id );
+
+		if ( empty( $course_ids ) ) {
+			return false;
+		}
+
+		// User must be enrolled in at least the first course to have access to bundle
+		// (Phase 4 enrollment handler enrolls in ALL courses simultaneously, so check first as shortcut)
+		foreach ( $course_ids as $course_id ) {
+			$enrollment_result = tutor_utils()->is_enrolled( $course_id, $user_id );
+			
+			// Handle both object and ID returns from is_enrolled()
+			$enrollment_id = false;
+			if ( $enrollment_result ) {
+				if ( is_object( $enrollment_result ) && isset( $enrollment_result->ID ) ) {
+					$enrollment_id = (int) $enrollment_result->ID;
+				} elseif ( is_numeric( $enrollment_result ) ) {
+					$enrollment_id = (int) $enrollment_result;
+				}
+			}
+			
+			if ( $enrollment_id ) {
+				// Verify it's a PMPro membership enrollment (not individual purchase)
+				// Check both new flag (_tutorpress_pmpro_membership_enrollment) and checkout meta (_tutor_pmpro_level_id)
+				$meta1 = get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true );
+				$meta2 = get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true );
+				
+				if ( $meta1 || $meta2 ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Get detailed bundle enrollment status.
+	 *
+	 * Phase 4: Helper method to retrieve enrollment count and status for bundles.
+	 * Used to determine if user has full access to all courses in the bundle.
+	 *
+	 * Handles both new and retroactive enrollments:
+	 * - New enrollments: checks for _tutorpress_pmpro_membership_enrollment meta
+	 * - Retroactive enrollments: checks for _tutor_pmpro_level_id meta (set on checkout)
+	 *
+	 * @since 1.0.0
+	 * @param int $bundle_id Bundle post ID.
+	 * @param int|null $user_id User ID (defaults to current user).
+	 * @return array {
+	 *     @type bool $is_enrolled True if enrolled in all bundle courses via PMPro.
+	 *     @type int $courses_enrolled Number of courses user is enrolled in.
+	 *     @type int $courses_total Total courses in bundle.
+	 * }
+	 */
+	private function get_bundle_enrollment_status( $bundle_id, $user_id = null ) {
+		if ( ! $user_id ) {
+			$user_id = get_current_user_id();
+		}
+
+		$return = array(
+			'is_enrolled' => false,
+			'courses_enrolled' => 0,
+			'courses_total' => 0,
+		);
+
+		if ( ! $user_id || ! class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
+			return $return;
+		}
+
+		$course_ids = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_course_ids( $bundle_id );
+		$return['courses_total'] = count( $course_ids );
+
+		if ( empty( $course_ids ) ) {
+			return $return;
+		}
+
+		$enrolled_count = 0;
+		$has_pmpro_enrollment = false;
+
+		foreach ( $course_ids as $course_id ) {
+			$enrollment_result = tutor_utils()->is_enrolled( $course_id, $user_id );
+			
+			// Handle both object and ID returns from is_enrolled()
+			$enrollment_id = false;
+			if ( $enrollment_result ) {
+				if ( is_object( $enrollment_result ) && isset( $enrollment_result->ID ) ) {
+					$enrollment_id = (int) $enrollment_result->ID;
+				} elseif ( is_numeric( $enrollment_result ) ) {
+					$enrollment_id = (int) $enrollment_result;
+				}
+			}
+			
+			if ( $enrollment_id ) {
+				$enrolled_count++;
+				// Check if it's PMPro membership enrollment
+				// Check both new flag (_tutorpress_pmpro_membership_enrollment) and checkout meta (_tutor_pmpro_level_id)
+				if ( get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true ) ||
+					 get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true ) ) {
+					$has_pmpro_enrollment = true;
+				}
+			}
+		}
+
+		$return['courses_enrolled'] = $enrolled_count;
+		$return['is_enrolled'] = ( $enrolled_count === $return['courses_total'] && $return['courses_total'] > 0 && $has_pmpro_enrollment );
+
+		return $return;
+	}
+
+	/**
+	 * Get bundle enrollment date for display.
+	 *
+	 * Phase 4: Helper method to retrieve when user enrolled in the bundle.
+	 * Returns the earliest enrollment date among all courses (when bundle access began).
+	 *
+	 * Handles both new and retroactive enrollments:
+	 * - New enrollments: uses enrollment post_date
+	 * - Retroactive enrollments: uses enrollment post_date (same for both)
+	 *
+	 * @since 1.0.0
+	 * @param int $bundle_id Bundle post ID.
+	 * @param int|null $user_id User ID (defaults to current user).
+	 * @return string|false Formatted enrollment date or false if not enrolled.
+	 */
+	private function get_bundle_enrollment_date( $bundle_id, $user_id = null ) {
+		if ( ! $user_id ) {
+			$user_id = get_current_user_id();
+		}
+
+		if ( ! $user_id || ! class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
+			return false;
+		}
+
+		$course_ids = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_course_ids( $bundle_id );
+
+		if ( empty( $course_ids ) ) {
+			return false;
+		}
+
+		$enrollment_dates = array();
+
+		foreach ( $course_ids as $course_id ) {
+			$enrollment_result = tutor_utils()->is_enrolled( $course_id, $user_id );
+			
+			// Handle both object and ID returns from is_enrolled()
+			$enrollment_id = false;
+			if ( $enrollment_result ) {
+				if ( is_object( $enrollment_result ) && isset( $enrollment_result->ID ) ) {
+					$enrollment_id = (int) $enrollment_result->ID;
+				} elseif ( is_numeric( $enrollment_result ) ) {
+					$enrollment_id = (int) $enrollment_result;
+				}
+			}
+			
+			if ( $enrollment_id ) {
+				// Verify it's a PMPro enrollment before adding date
+				if ( get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true ) ||
+					 get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true ) ) {
+					// Get enrollment post date
+					$post = get_post( $enrollment_id );
+					if ( $post ) {
+						$enrollment_dates[] = strtotime( $post->post_date );
+					}
+				}
+			}
+		}
+
+		if ( empty( $enrollment_dates ) ) {
+			return false;
+		}
+
+		// Return earliest enrollment date (when user got access to bundle)
+		$earliest = min( $enrollment_dates );
+		return date_i18n( get_option( 'date_format' ), $earliest );
 	}
 
 	/**

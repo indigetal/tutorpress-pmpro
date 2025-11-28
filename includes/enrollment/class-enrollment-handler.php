@@ -118,6 +118,14 @@ class Enrollment_Handler {
 							update_post_meta( $enrolled_id, '_tutor_pmpro_level_id', (int) $morder->membership_id );
 						}
 					}
+					
+					// Phase 4: Mark as PMPro membership enrollment for display logic
+					update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
+					update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_level_id', $order_level_id );
+					
+					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+						error_log( '[TP-PMPRO] pmpro_after_checkout_enroll enrolled user=' . $user_id . ' course=' . $course_id . ' enrollment_id=' . $enrolled_id . ' level=' . $order_level_id );
+					}
 				}
 			}
 		}
@@ -179,6 +187,14 @@ class Enrollment_Handler {
 					$enrolled_id = tutor_utils()->do_enroll( $course_id, 0, $user_id );
 					if ( $enrolled_id ) {
 						tutor_utils()->course_enrol_status_change( $enrolled_id, 'completed' );
+						
+						// Phase 4: Mark as PMPro membership enrollment for display logic
+						update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
+						update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
+						
+						if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+							error_log( '[TP-PMPRO] pmpro_after_change_membership_level enrolled user=' . $user_id . ' course=' . $course_id . ' enrollment_id=' . $enrolled_id . ' level=' . $level_id );
+						}
 					}
 				}
 			}
@@ -281,6 +297,18 @@ class Enrollment_Handler {
 					$enrolled_id = tutor_utils()->do_enroll( $course_id, 0, $user_id );
 					if ( $enrolled_id ) {
 						tutor_utils()->course_enrol_status_change( $enrolled_id, 'completed' );
+						
+						// Phase 4: Mark as PMPro membership enrollment for display logic
+						// Get the first current level ID (user's active level)
+						$level_id = ! empty( $current_level_ids ) ? $current_level_ids[0] : 0;
+						if ( $level_id > 0 ) {
+							update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
+							update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
+							
+							if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+								error_log( '[TP-PMPRO] pmpro_after_all_membership_level_changes enrolled user=' . $user_id . ' course=' . $course_id . ' enrollment_id=' . $enrolled_id . ' level=' . $level_id );
+							}
+						}
 					}
 				}
 			}
@@ -423,7 +451,7 @@ class Enrollment_Handler {
 
 		$course_ids = array();
 
-		// Primary: pmpro_memberships_pages table
+		// Primary: pmpro_memberships_pages table (courses only)
 		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
 			$post_type   = tutor()->course_post_type;
 			$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
@@ -466,6 +494,35 @@ class Enrollment_Handler {
 					'posts_per_page' => -1,
 				) );
 				$course_ids = array_merge( $course_ids, $valid_courses );
+			}
+		}
+
+		// Phase 4: Bundle support - look for bundle-linked levels and expand to bundle courses
+		// This handles levels that are linked via tutorpress_bundle_id meta
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) && class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
+			$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
+			$sql = "
+				SELECT DISTINCT CAST(meta_value AS UNSIGNED) as bundle_id
+				FROM {$wpdb->pmpro_membership_levelmeta}
+				WHERE meta_key = 'tutorpress_bundle_id'
+				AND pmpro_membership_level_id IN ( {$placeholders} )
+				AND CAST(meta_value AS UNSIGNED) > 0
+			";
+			$params = array_merge( array( $sql ), $level_ids );
+			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
+			$bundle_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			
+			if ( is_array( $bundle_ids ) && ! empty( $bundle_ids ) ) {
+				foreach ( $bundle_ids as $bundle_id ) {
+					$bundle_id = (int) $bundle_id;
+					if ( $bundle_id > 0 ) {
+						// Get all courses in this bundle
+						$bundle_course_ids = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_course_ids( $bundle_id );
+						if ( is_array( $bundle_course_ids ) && ! empty( $bundle_course_ids ) ) {
+							$course_ids = array_merge( $course_ids, array_map( 'intval', $bundle_course_ids ) );
+						}
+					}
+				}
 			}
 		}
 

@@ -954,7 +954,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
         // Sync associations to match the ordered IDs
         if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
             \TUTORPRESS_PMPRO\PMPro_Association::sync_course_level_associations( $object_id, $ordered_ids );
-		}
+        }
 
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $ordered_ids, __( 'Subscription plans reordered.', 'tutorpress-pmpro' ) ) );
 	}
