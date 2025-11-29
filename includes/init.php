@@ -632,15 +632,46 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 
-		// Extract context from REST request
+		// Extract context from REST request (check both top-level and meta object)
 		$so_keys = array( 'selling_option', 'tutor_course_selling_option' );
 		$pt_keys = array( 'price_type', 'tutor_course_price_type', '_tutor_course_price_type' );
 		$price_keys = array( 'price', 'tutor_course_price' );
 		$so = null; $pt = null; $price = null;
+		
 		if ( method_exists( $request, 'get_param' ) ) {
+			// First, try to get from top-level params (for direct API calls)
 			foreach ( $so_keys as $k ) { if ( null === $so ) { $so = $request->get_param( $k ); } }
 			foreach ( $pt_keys as $k ) { if ( null === $pt ) { $pt = $request->get_param( $k ); } }
 			foreach ( $price_keys as $k ) { if ( null === $price ) { $price = $request->get_param( $k ); } }
+			
+			// If not found, try to get from meta object (for Gutenberg saves)
+			$meta = $request->get_param( 'meta' );
+			if ( is_array( $meta ) ) {
+				if ( null === $so ) {
+					foreach ( $so_keys as $k ) {
+						if ( isset( $meta[ $k ] ) ) {
+							$so = $meta[ $k ];
+							break;
+						}
+					}
+				}
+				if ( null === $pt ) {
+					foreach ( $pt_keys as $k ) {
+						if ( isset( $meta[ $k ] ) ) {
+							$pt = $meta[ $k ];
+							break;
+						}
+					}
+				}
+				if ( null === $price ) {
+					foreach ( $price_keys as $k ) {
+						if ( isset( $meta[ $k ] ) ) {
+							$price = $meta[ $k ];
+							break;
+						}
+					}
+				}
+			}
 		}
 		
 		// Fallback to post meta if not in request (use standard Tutor Core meta key)
@@ -732,15 +763,46 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 
-		// Extract context from REST request (same pattern as courses)
+		// Extract context from REST request (check both top-level and meta object)
 		$so_keys = array( 'selling_option', 'tutor_course_selling_option' );
 		$pt_keys = array( 'price_type', 'tutor_course_price_type', '_tutor_course_price_type' );
 		$price_keys = array( 'price', 'tutor_course_price', 'sale_price', 'tutor_course_sale_price' );
 		$so = null; $pt = null; $price = null;
+		
 		if ( method_exists( $request, 'get_param' ) ) {
+			// First, try to get from top-level params (for direct API calls)
 			foreach ( $so_keys as $k ) { if ( null === $so ) { $so = $request->get_param( $k ); } }
 			foreach ( $pt_keys as $k ) { if ( null === $pt ) { $pt = $request->get_param( $k ); } }
 			foreach ( $price_keys as $k ) { if ( null === $price ) { $price = $request->get_param( $k ); } }
+			
+			// If not found, try to get from meta object (for Gutenberg saves)
+			$meta = $request->get_param( 'meta' );
+			if ( is_array( $meta ) ) {
+				if ( null === $so ) {
+					foreach ( $so_keys as $k ) {
+						if ( isset( $meta[ $k ] ) ) {
+							$so = $meta[ $k ];
+							break;
+						}
+					}
+				}
+				if ( null === $pt ) {
+					foreach ( $pt_keys as $k ) {
+						if ( isset( $meta[ $k ] ) ) {
+							$pt = $meta[ $k ];
+							break;
+						}
+					}
+				}
+				if ( null === $price ) {
+					foreach ( $price_keys as $k ) {
+						if ( isset( $meta[ $k ] ) ) {
+							$price = $meta[ $k ];
+							break;
+						}
+					}
+				}
+			}
 		}
 		
 		// Fallback to post meta if not in request (use standard Tutor Core meta keys)
@@ -753,13 +815,18 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( null === $price ) {
 			$price = get_post_meta( $bundle_id, 'tutor_course_price', true );
 		}
-
 		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+		// Pass extracted values through context so reconcile_bundle_levels uses them instead of reading stale DB values
 		if ( ! isset( $this->reconcile_scheduled[ $bundle_id ] ) ) {
 			$this->reconcile_scheduled[ $bundle_id ] = true;
 			
-			add_action( 'shutdown', function() use ( $bundle_id ) {
-				$this->reconcile_bundle_levels( $bundle_id, array( 'source' => 'shutdown' ) );
+			add_action( 'shutdown', function() use ( $bundle_id, $so, $pt, $price ) {
+				$ctx = array( 'source' => 'shutdown' );
+				// Pass extracted values through context
+				if ( null !== $so ) { $ctx['selling_option'] = $so; }
+				if ( null !== $pt ) { $ctx['price_type'] = $pt; }
+				if ( null !== $price ) { $ctx['price'] = $price; }
+				$this->reconcile_bundle_levels( $bundle_id, $ctx );
 			}, 999 );
 		}
 	}
@@ -1130,15 +1197,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 				// row itself may already be missing. full_delete_level is idempotent
 				// and safe when called for non-existent ids.
 				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( $sid, true );
-				$this->log( '[TP-PMPRO] get_bundle_pmpro_state pruned_stale_level=' . $sid . ' bundle=' . $bundle_id . ' source=' . $src );
 			}
-			$this->log( '[TP-PMPRO] get_bundle_pmpro_state pruned_stale_count=' . count( $stale_ids ) . ' bundle=' . $bundle_id . ' source=' . $src );
 		}
 
 		// Rewrite _tutorpress_pmpro_levels to match verified valid_ids
 		update_post_meta( $bundle_id, '_tutorpress_pmpro_levels', $valid_ids );
-
-		$this->log( '[TP-PMPRO] get_bundle_pmpro_state discovered; bundle=' . $bundle_id . ' valid=' . count( $valid_ids ) . ' one_time=' . count( $one_time_ids ) . ' recurring=' . count( $recurring_ids ) . ' stale=' . count( $stale_ids ) . ' source=' . $src );
 
 		return array(
 			'valid_ids'     => $valid_ids,
@@ -1162,16 +1225,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
-		$this->log( '[TP-PMPRO] reconcile_course_levels fired; course=' . $course_id . ' source=' . $src );
 
 		// Step 0: Acquire short-lived lock to prevent concurrent double-runs
 		$lock_key = 'tp_pmpro_lock_' . $course_id;
 		if ( get_transient( $lock_key ) ) {
-			$this->log( '[TP-PMPRO] reconcile_course_levels skipped (already running); course=' . $course_id );
 			return;
 		}
 		set_transient( $lock_key, 1, 5 ); // 5-second lock expiry
-		$this->log( '[TP-PMPRO] reconcile_course_levels acquired_lock; course=' . $course_id );
 
 		try {
 			// Consume any pending plans saved while in draft
@@ -1227,37 +1287,28 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
 		$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
 		$price = get_post_meta( $course_id, 'tutor_course_price', true );
-			
-		$this->log( '[TP-PMPRO] reconcile_course_levels context; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' price=' . ( $price ? $price : 'n/a' ) . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
 
 		// Branch handling: free / membership / subscription / one_time / both / all
 		if ( 'free' === $price_type ) {
-			$this->log( '[TP-PMPRO] reconcile_course_levels branch=free; course=' . $course_id );
 			$this->handle_free_branch( $course_id, $state );
 			return;
 		}
 		if ( 'membership' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_course_levels branch=membership; course=' . $course_id );
 			$this->handle_membership_branch( $course_id, $state );
 			return;
 		}
 		if ( 'subscription' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_course_levels branch=subscription; course=' . $course_id );
 			$this->handle_subscription_branch( $course_id, $state );
 			return;
 		}
 		if ( 'one_time' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_course_levels branch=one_time; course=' . $course_id );
 			$this->handle_one_time_branch( $course_id, $state );
 			return;
 		}
 		if ( 'both' === $selling_option || 'all' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_course_levels branch=both_or_all; course=' . $course_id . ' selling_option=' . $selling_option );
 			$this->handle_both_and_all_branch( $course_id, $state );
 			return;
 		}
-		// Log unhandled case
-		$this->log( '[TP-PMPRO] reconcile_course_levels branch=UNHANDLED; course=' . $course_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) );
 		// Default: ensure meta matches valid IDs (fallback for undefined selling options)
 		if ( ! empty( $state['valid_ids'] ) ) {
 			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
@@ -1265,7 +1316,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 		} finally {
 			// Always cleanup lock, even if exception or early return
 			delete_transient( $lock_key );
-			$this->log( '[TP-PMPRO] reconcile_course_levels released_lock; course=' . $course_id );
 		}
 	}
 
@@ -1284,16 +1334,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
-		$this->log( '[TP-PMPRO] reconcile_bundle_levels fired; bundle=' . $bundle_id . ' source=' . $src );
 
 		// Step 0: Acquire short-lived lock to prevent concurrent double-runs
 		$lock_key = 'tp_pmpro_lock_bundle_' . $bundle_id;
 		if ( get_transient( $lock_key ) ) {
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels skipped (already running); bundle=' . $bundle_id );
 			return;
 		}
 		set_transient( $lock_key, 1, 5 ); // 5-second lock expiry
-		$this->log( '[TP-PMPRO] reconcile_bundle_levels acquired_lock; bundle=' . $bundle_id );
 
 		try {
 			// Consume any pending plans saved while in draft (same pattern as courses)
@@ -1348,54 +1395,39 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Step 2: Association discovery and context extraction
 		$state = $this->get_bundle_pmpro_state( $bundle_id, array( 'source' => $src ) );
 		
-		// Read bundle pricing context from post meta (use standard Tutor Core meta keys)
-		$selling_option = get_post_meta( $bundle_id, 'tutor_course_selling_option', true );
-		$price_type = get_post_meta( $bundle_id, '_tutor_course_price_type', true );
+		// Read bundle pricing context - prefer values from context (passed from REST), fallback to post meta
+		$selling_option = isset( $ctx['selling_option'] ) ? $ctx['selling_option'] : get_post_meta( $bundle_id, 'tutor_course_selling_option', true );
+		$price_type = isset( $ctx['price_type'] ) ? $ctx['price_type'] : get_post_meta( $bundle_id, '_tutor_course_price_type', true );
 		
 		// For bundles: regular_price is auto-calculated, sale_price is instructor-set
 		$regular_price = $this->calculate_bundle_regular_price( $bundle_id );
-		$sale_price = get_post_meta( $bundle_id, 'tutor_course_sale_price', true );
+		$sale_price = isset( $ctx['sale_price'] ) ? $ctx['sale_price'] : get_post_meta( $bundle_id, 'tutor_course_sale_price', true );
 			
-		// Format prices for logging (0 is valid, so check if numeric)
-		$regular_price_log = is_numeric( $regular_price ) ? $regular_price : 'n/a';
-		$sale_price_log = is_numeric( $sale_price ) ? $sale_price : 'n/a';
-		$this->log( '[TP-PMPRO] reconcile_bundle_levels context; bundle=' . $bundle_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) . ' regular_price=' . $regular_price_log . ' sale_price=' . $sale_price_log . ' valid_levels=' . count( $state['valid_ids'] ) . ' one_time=' . count( $state['one_time_ids'] ) . ' recurring=' . count( $state['recurring_ids'] ) );
-
 		// Branch handling: free / membership / subscription / one_time / both / all
 		// Note: For bundles, if regular_price = 0 (all courses free), treat as free
-		if ( 'free' === $price_type || $regular_price <= 0 ) {
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=free; bundle=' . $bundle_id );
+		// IMPORTANT: Only treat as free if selling_option is NOT set to a paid option
+		// (TutorPress bundles default to price_type='free', but selling_option takes precedence)
+		$is_paid_selling_option = in_array( $selling_option, array( 'subscription', 'one_time', 'both', 'all' ), true );
+		if ( ( 'free' === $price_type || $regular_price <= 0 ) && ! $is_paid_selling_option ) {
 			$this->handle_free_branch( $bundle_id, $state );
 			return;
 		}
 		if ( 'membership' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=membership; bundle=' . $bundle_id );
 			$this->handle_membership_branch( $bundle_id, $state );
 			return;
 		}
 		if ( 'subscription' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=subscription; bundle=' . $bundle_id );
-			// TODO: Handle subscription branch for bundles (will be implemented in later step)
-			// For now, log and return
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels subscription branch not yet implemented for bundles; bundle=' . $bundle_id );
+			$this->handle_subscription_branch( $bundle_id, $state, 'course-bundle' );
 			return;
 		}
 		if ( 'one_time' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=one_time; bundle=' . $bundle_id );
-			// TODO: Handle one-time branch for bundles (will be implemented in later step)
-			// For now, log and return
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels one_time branch not yet implemented for bundles; bundle=' . $bundle_id );
+			$this->handle_one_time_branch( $bundle_id, $state, 'course-bundle' );
 			return;
 		}
 		if ( 'both' === $selling_option || 'all' === $selling_option ) {
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=both_or_all; bundle=' . $bundle_id . ' selling_option=' . $selling_option );
-			// TODO: Handle both/all branch for bundles (will be implemented in later step)
-			// For now, log and return
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels both/all branch not yet implemented for bundles; bundle=' . $bundle_id );
+			$this->handle_both_and_all_branch( $bundle_id, $state, 'course-bundle' );
 			return;
 		}
-		// Log unhandled case
-		$this->log( '[TP-PMPRO] reconcile_bundle_levels branch=UNHANDLED; bundle=' . $bundle_id . ' selling_option=' . ( $selling_option ? $selling_option : 'n/a' ) . ' price_type=' . ( $price_type ? $price_type : 'n/a' ) );
 		// Default: ensure meta matches valid IDs (fallback for undefined selling options)
 		if ( ! empty( $state['valid_ids'] ) ) {
 			update_post_meta( $bundle_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
@@ -1403,7 +1435,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 		} finally {
 			// Always cleanup lock, even if exception or early return
 			delete_transient( $lock_key );
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels released_lock; bundle=' . $bundle_id );
 		}
 	}
 
@@ -1443,13 +1474,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * @param array $state
 	 * @return void
 	 */
-	private function handle_subscription_branch( $course_id, $state = array() ) {
-		$course_id = (int) $course_id;
+	private function handle_subscription_branch( $object_id, $state = array(), $post_type = 'courses' ) {
+		$object_id = (int) $object_id;
 		$one_time = isset( $state['one_time_ids'] ) ? (array) $state['one_time_ids'] : array();
 		$recurring = isset( $state['recurring_ids'] ) ? (array) $state['recurring_ids'] : array();
+		$object_label = ( $post_type === 'course-bundle' ) ? 'bundle' : 'course';
+		
 		if ( empty( $one_time ) ) {
 			// Nothing to delete; ensure meta only contains recurring ids
-			update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
+			update_post_meta( $object_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
 			return;
 		}
 		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
@@ -1457,25 +1490,28 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		foreach ( $one_time as $lid ) {
 			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
-			$this->log( '[TP-PMPRO] handle_subscription_branch deleted_one_time_level_id=' . (int) $lid . ' course=' . $course_id );
+			$this->log( '[TP-PMPRO] handle_subscription_branch deleted_one_time_level_id=' . (int) $lid . ' ' . $object_label . '=' . $object_id );
 		}
 		// Persist remaining recurring IDs
-		update_post_meta( $course_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
-		$this->log( '[TP-PMPRO] handle_subscription_branch updated_course_levels; course=' . $course_id . ' recurring_count=' . count( $recurring ) );
+		update_post_meta( $object_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
+		$this->log( '[TP-PMPRO] handle_subscription_branch updated_levels; ' . $object_label . '=' . $object_id . ' recurring_count=' . count( $recurring ) );
 	}
 
 	/**
 	 * Handle One-time-only branch: keep one-time levels, remove recurring levels.
 	 * If multiple one-time levels exist, prefer the first and keep all one-time ids by default.
 	 *
-	 * @param int $course_id
-	 * @param array $state
+	 * @param int $object_id Course or bundle ID
+	 * @param array $state State array from get_course_pmpro_state() or get_bundle_pmpro_state()
+	 * @param string $post_type Post type ('courses' or 'course-bundle')
 	 * @return void
 	 */
-	private function handle_one_time_branch( $course_id, $state = array() ) {
-		$course_id = (int) $course_id;
+	private function handle_one_time_branch( $object_id, $state = array(), $post_type = 'courses' ) {
+		$object_id = (int) $object_id;
 		$one_time = isset( $state['one_time_ids'] ) ? (array) $state['one_time_ids'] : array();
 		$recurring = isset( $state['recurring_ids'] ) ? (array) $state['recurring_ids'] : array();
+		$object_label = ( $post_type === 'course-bundle' ) ? 'bundle' : 'course';
+		$meta_key = ( $post_type === 'course-bundle' ) ? 'tutorpress_bundle_id' : 'tutorpress_course_id';
 
 		// Step 1: Delete all recurring levels
 		if ( ! empty( $recurring ) ) {
@@ -1484,14 +1520,19 @@ if ( ! defined( 'ABSPATH' ) ) {
 			}
 			foreach ( $recurring as $rid ) {
 				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $rid, true );
-				$this->log( '[TP-PMPRO] handle_one_time_branch deleted_recurring_level_id=' . (int) $rid . ' course=' . $course_id );
+				$this->log( '[TP-PMPRO] handle_one_time_branch deleted_recurring_level_id=' . (int) $rid . ' ' . $object_label . '=' . $object_id );
 			}
 		}
 
 		// Step 2: Ensure exactly one one-time level exists (upsert logic)
 		$level_id = 0;
-		$regular_price = get_post_meta( $course_id, 'tutor_course_price', true );
-		$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
+		// For bundles, use calculated regular price; for courses, use meta field
+		if ( $post_type === 'course-bundle' ) {
+			$regular_price = $this->calculate_bundle_regular_price( $object_id );
+		} else {
+			$regular_price = get_post_meta( $object_id, 'tutor_course_price', true );
+			$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
+		}
 
 		if ( ! empty( $one_time ) ) {
 			// One-time level(s) exist: update the first one
@@ -1499,23 +1540,23 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$level_id = (int) $one_time[0];
 			global $wpdb;
 			$update_data = array(
-				'name'            => get_the_title( $course_id ) . ' (One-time)',
-				'description'     => get_post_field( 'post_excerpt', $course_id ) ?: '',
+				'name'            => get_the_title( $object_id ) . ' (One-time)',
+				'description'     => get_post_field( 'post_excerpt', $object_id ) ?: '',
 				'billing_amount'  => 0,
 				'cycle_number'    => 0,
 				'cycle_period'    => '',
 				'billing_limit'   => 0,
 			);
 			$wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $level_id ), array( '%s', '%s', '%f', '%d', '%s', '%d' ), array( '%d' ) );
-			$this->log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' course=' . $course_id . ' (initial_payment handled by sale_price logic)' );
+			$this->log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' ' . $object_label . '=' . $object_id . ' (initial_payment handled by sale_price logic)' );
 		} else {
 			// No one-time level exists: create one
 			// NOTE: initial_payment is handled by handle_sale_price_for_one_time() to support sales
 			if ( $regular_price > 0 ) {
 				global $wpdb;
 				$insert_data = array(
-					'name'            => get_the_title( $course_id ) . ' (One-time)',
-					'description'     => get_post_field( 'post_excerpt', $course_id ) ?: '',
+					'name'            => get_the_title( $object_id ) . ' (One-time)',
+					'description'     => get_post_field( 'post_excerpt', $object_id ) ?: '',
 					'initial_payment' => 0,  // Temporary, will be set by handle_sale_price_for_one_time()
 					'billing_amount'  => 0,
 					'cycle_number'    => 0,
@@ -1527,12 +1568,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 				$wpdb->insert( $wpdb->pmpro_membership_levels, $insert_data );
 				$level_id = (int) $wpdb->insert_id;
 				if ( $level_id > 0 ) {
-					$this->log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' course=' . $course_id . ' (initial_payment will be set by sale_price logic)' );
+					$this->log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' ' . $object_label . '=' . $object_id . ' (initial_payment will be set by sale_price logic)' );
 				}
 			} else {
-				$this->log( '[TP-PMPRO] handle_one_time_branch no_price_set; course=' . $course_id );
+				$this->log( '[TP-PMPRO] handle_one_time_branch no_price_set; ' . $object_label . '=' . $object_id );
 				// No price set and no existing level; just clear meta
-				delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
+				delete_post_meta( $object_id, '_tutorpress_pmpro_levels' );
 				return;
 			}
 		}
@@ -1540,30 +1581,30 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Step 3: Set reverse ownership meta and ensure association
 		if ( $level_id > 0 ) {
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-				update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
+				update_pmpro_membership_level_meta( $level_id, $meta_key, $object_id );
 				update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
-				$this->log( '[TP-PMPRO] handle_one_time_branch set_reverse_meta level_id=' . $level_id . ' course=' . $course_id );
+				$this->log( '[TP-PMPRO] handle_one_time_branch set_reverse_meta level_id=' . $level_id . ' ' . $object_label . '=' . $object_id );
 			}
 			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
 				require_once $this->path . 'includes/utilities/class-pmpro-association.php';
 			}
-			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
-			$this->log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' course=' . $course_id );
+			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
+			$this->log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' ' . $object_label . '=' . $object_id );
 			
-			// Phase 5: Add level to course group
-			self::add_level_to_course_group( $course_id, $level_id );
+			// Phase 5: Add level to course/bundle group
+			self::add_level_to_course_group( $object_id, $level_id, $post_type );
 			
 			// Step 3.5: Handle sale price for one-time purchase
-			$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
+			$this->handle_sale_price_for_one_time( $object_id, $level_id, $regular_price, $post_type );
 		}
 
-		// Step 4: Update course meta with final level ID(s)
+		// Step 4: Update meta with final level ID(s)
 		if ( $level_id > 0 ) {
-			update_post_meta( $course_id, '_tutorpress_pmpro_levels', array( $level_id ) );
-			$this->log( '[TP-PMPRO] handle_one_time_branch final_meta_update; course=' . $course_id . ' level_id=' . $level_id );
+			update_post_meta( $object_id, '_tutorpress_pmpro_levels', array( $level_id ) );
+			$this->log( '[TP-PMPRO] handle_one_time_branch final_meta_update; ' . $object_label . '=' . $object_id . ' level_id=' . $level_id );
 		} else {
-			delete_post_meta( $course_id, '_tutorpress_pmpro_levels' );
-			$this->log( '[TP-PMPRO] handle_one_time_branch cleared_meta; course=' . $course_id );
+			delete_post_meta( $object_id, '_tutorpress_pmpro_levels' );
+			$this->log( '[TP-PMPRO] handle_one_time_branch cleared_meta; ' . $object_label . '=' . $object_id );
 		}
 	}
 
