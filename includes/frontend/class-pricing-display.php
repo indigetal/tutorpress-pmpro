@@ -87,6 +87,9 @@ class Pricing_Display {
 		add_filter( 'tutor_course_loop_price', array( $this, 'filter_course_loop_price_pmpro' ), 12, 2 );
 		add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
 		
+		// Bundle course price override for bundle price calculation (TutorPress Gutenberg panel)
+		add_filter( 'tutorpress_bundle_course_price', array( $this, 'filter_bundle_course_price' ), 10, 5 );
+		
 		// Phase 4: Alter bundle enrollment status for entry box
 		add_filter( 'tutor_alter_enroll_status', array( $this, 'alter_bundle_enroll_status' ), 10, 1 );
 		
@@ -604,6 +607,77 @@ class Pricing_Display {
 		}
 
 		return $price;
+	}
+
+	/**
+	 * Override course price in bundle course lists when PMPro is active.
+	 *
+	 * This filter is called by TutorPress when building the bundle courses list
+	 * for the /tutorpress/v1/bundles/{id}/courses endpoint. It allows PMPro
+	 * to inject membership-based pricing instead of native Tutor LMS pricing.
+	 *
+	 * Used by the Bundle Pricing Panel in Gutenberg to calculate the total value
+	 * of bundled courses.
+	 *
+	 * @since 1.0.0
+	 * @param string $price         Current price HTML string.
+	 * @param int    $course_id     Course post ID.
+	 * @param float  $regular_price Native Tutor LMS regular price.
+	 * @param float  $sale_price    Native Tutor LMS sale price.
+	 * @param string $price_type    Price type (free, paid, etc.).
+	 * @return string Modified price HTML string.
+	 */
+	public function filter_bundle_course_price( $price, $course_id, $regular_price, $sale_price, $price_type ) {
+		// Guard: PMPro must be enabled
+		if ( ! $this->pmpro->is_pmpro_enabled() ) {
+			return $price;
+		}
+
+		// Respect free courses
+		if ( $price_type === 'free' ) {
+			return $price;
+		}
+
+		// Get PMPro level IDs for this course
+		$level_ids = $this->get_level_ids_for_object( $course_id, false );
+
+		if ( empty( $level_ids ) ) {
+			// No PMPro levels, use native pricing
+			return $price;
+		}
+
+		// For bundle price calculation, we want to use the REGULAR price (not sale price)
+		// This matches the comment in TutorPress: "ALWAYS use regular price for bundle calculation"
+		// We'll use the initial_payment from the first level as the regular price
+		$level = pmpro_getLevel( (int) $level_ids[0] );
+		if ( ! $level ) {
+			return $price;
+		}
+
+		// Get active price data (handles sale schedule)
+		$active_price_data = $this->sale_price_handler->get_active_price_for_level( (int) $level_ids[0] );
+		$active_price      = isset( $active_price_data['price'] ) ? (float) $active_price_data['price'] : (float) $level->initial_payment;
+		$is_on_sale        = ! empty( $active_price_data['on_sale'] );
+		$regular_price_pmpro = $is_on_sale && isset( $active_price_data['regular_price'] ) ? (float) $active_price_data['regular_price'] : $active_price;
+
+		// Format price string to match TutorPress format
+		// IMPORTANT: TutorPress's extractNumericPrice() expects format: <span>$10.00</span>
+		// The $ symbol must be INSIDE the span for the regex to work correctly
+		if ( $is_on_sale && $regular_price_pmpro > $active_price ) {
+			// With sale: show regular price crossed out, sale price normal
+			// For bundle calculation, TutorPress will extract the regular price (first span)
+			return sprintf(
+				'<span class="tutor-course-price-regular" style="text-decoration: line-through;">$%s</span><span class="tutor-course-price-sale">$%s</span>',
+				number_format( $regular_price_pmpro, 2 ),
+				number_format( $active_price, 2 )
+			);
+		} else {
+			// No sale: show regular price only
+			return sprintf(
+				'<span class="tutor-course-price-regular">$%s</span>',
+				number_format( $regular_price_pmpro, 2 )
+			);
+		}
 	}
 
 	/**

@@ -176,6 +176,16 @@ class PMPro_Earnings_Handler {
 			return;
 		}
 
+		// Phase 5: Check if this is a bundle-specific level first
+		$bundle_id = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->prefix}pmpro_membership_levelmeta
+				 WHERE pmpro_membership_level_id = %d AND meta_key = 'tutorpress_bundle_id'
+				 LIMIT 1",
+				$level->id
+			)
+		);
+
 		// Check if this is a TutorPress-managed course-specific level.
 		// Multisite fix: Query level meta directly with proper table prefix
 		$course_id = $wpdb->get_var(
@@ -188,15 +198,22 @@ class PMPro_Earnings_Handler {
 		);
 		
 		error_log( sprintf(
-			'[TP-PMPRO Earnings] Level meta lookup: level_id=%d course_id=%s table=%spmpro_membership_levelmeta',
+			'[TP-PMPRO Earnings] Level meta lookup: level_id=%d course_id=%s bundle_id=%s table=%spmpro_membership_levelmeta',
 			$level->id,
 			$course_id ? $course_id : 'NULL',
+			$bundle_id ? $bundle_id : 'NULL',
 			$wpdb->prefix
 		) );
 		
+		// Phase 5: Handle bundle purchases
+		if ( $bundle_id ) {
+			$this->handle_bundle_checkout( $user_id, $morder, $level, $bundle_id );
+			return;
+		}
+		
 		if ( ! $course_id ) {
-			// Not a course-specific level (e.g., full-site membership) - skip earnings.
-			error_log( '[TP-PMPRO Earnings] No course_id found for level ' . $level->id . ', skipping (not a course-specific level)' );
+			// Not a course-specific or bundle-specific level (e.g., full-site membership) - skip earnings.
+			error_log( '[TP-PMPRO Earnings] No course_id or bundle_id found for level ' . $level->id . ', skipping (not a course/bundle-specific level)' );
 			return;
 		}
 
@@ -233,6 +250,76 @@ class PMPro_Earnings_Handler {
 			$user_id,
 			$course_id,
 			$amount,
+			$morder->id,
+			$tutor_order_id
+		) );
+	}
+
+	/**
+	 * Handle bundle checkout earnings (Phase 5)
+	 *
+	 * Creates Tutor order and earnings for bundle purchases.
+	 * Revenue goes to bundle author (matches Tutor LMS native behavior).
+	 *
+	 * @since 1.0.0
+	 * @param int    $user_id   User ID.
+	 * @param object $morder    PMPro order object.
+	 * @param object $level     PMPro level object.
+	 * @param int    $bundle_id Bundle post ID.
+	 * @return void
+	 */
+	private function handle_bundle_checkout( $user_id, $morder, $level, $bundle_id ) {
+		// Verify bundle exists
+		if ( ! get_post( $bundle_id ) || 'course-bundle' !== get_post_type( $bundle_id ) ) {
+			error_log( '[TP-PMPRO Earnings] Invalid bundle_id=' . $bundle_id . ', skipping' );
+			return;
+		}
+
+		// Determine order type
+		$is_subscription = ! empty( $level->cycle_number ) || ! empty( $level->billing_amount );
+		$order_type      = $is_subscription ? OrderModel::TYPE_SUBSCRIPTION : OrderModel::TYPE_SINGLE_ORDER;
+
+		// Get the amount paid (use initial_payment for subscriptions, otherwise use total)
+		$amount = ! empty( $morder->total ) ? $morder->total : ( $is_subscription ? $level->initial_payment : 0 );
+
+		// Get bundle prices (regular = sum of courses, sale = what user paid)
+		$bundle_prices = $this->calculate_bundle_prices( $bundle_id, $amount );
+
+		// Create minimal Tutor order record
+		$tutor_order_id = $this->create_tutor_order(
+			array(
+				'order_type'     => $order_type,
+				'user_id'        => $user_id,
+				'item_id'        => $bundle_id, // Bundle ID (not course ID)
+				'item_type'      => 'bundle',
+				'amount'         => $amount,
+				'regular_price'  => $bundle_prices['regular_price'],
+				'sale_price'     => $bundle_prices['sale_price'],
+				'pmpro_order_id' => $morder->id,
+				'pmpro_level_id' => $level->id,
+			)
+		);
+
+		if ( ! $tutor_order_id ) {
+			error_log( '[TP-PMPRO Earnings] Failed to create Tutor order for bundle PMPro order #' . $morder->id );
+			return;
+		}
+
+		// Calculate and store earnings using Tutor Core
+		// Tutor Core's Earnings::prepare_earning_data() will:
+		// 1. Get bundle author from post_author field
+		// 2. Calculate commission split using global settings
+		// 3. Create earning record for bundle author
+		$this->calculate_and_store_earnings( $tutor_order_id );
+
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] Created %s earnings for user %d, bundle %d, amount $%s (regular: $%s, sale: $%s) (PMPro order #%d, Tutor order #%d)',
+			$order_type,
+			$user_id,
+			$bundle_id,
+			$amount,
+			$bundle_prices['regular_price'],
+			$bundle_prices['sale_price'],
 			$morder->id,
 			$tutor_order_id
 		) );
@@ -303,9 +390,19 @@ class PMPro_Earnings_Handler {
 
 		error_log( '[TP-PMPRO Earnings] Processing renewal for level #' . $level->id . ', user #' . ( isset( $morder->user_id ) ? $morder->user_id : 'unknown' ) );
 
+		// Phase 5: Check if this is a bundle-specific level first
+		global $wpdb;
+		$bundle_id = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->prefix}pmpro_membership_levelmeta
+				 WHERE pmpro_membership_level_id = %d AND meta_key = 'tutorpress_bundle_id'
+				 LIMIT 1",
+				$level->id
+			)
+		);
+
 		// Check if this is a TutorPress-managed course-specific level.
 		// Multisite fix: Query level meta directly with proper table prefix
-		global $wpdb;
 		$course_id = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT meta_value FROM {$wpdb->prefix}pmpro_membership_levelmeta
@@ -315,9 +412,15 @@ class PMPro_Earnings_Handler {
 			)
 		);
 		
+		// Phase 5: Handle bundle renewals
+		if ( $bundle_id ) {
+			$this->handle_bundle_renewal( $morder, $level, $bundle_id );
+			return;
+		}
+		
 		if ( ! $course_id ) {
-			// Not a course-specific level - skip earnings.
-			error_log( '[TP-PMPRO Earnings] Level #' . $level->id . ' is not a course-specific level, skipping renewal earnings (blog_id=' . get_current_blog_id() . ')' );
+			// Not a course-specific or bundle-specific level - skip earnings.
+			error_log( '[TP-PMPRO Earnings] Level #' . $level->id . ' is not a course/bundle-specific level, skipping renewal earnings (blog_id=' . get_current_blog_id() . ')' );
 			return;
 		}
 
@@ -351,6 +454,67 @@ class PMPro_Earnings_Handler {
 			$morder->user_id,
 			$course_id,
 			$amount,
+			$morder->id,
+			$tutor_order_id
+		) );
+	}
+
+	/**
+	 * Handle bundle subscription renewal earnings (Phase 5)
+	 *
+	 * Creates Tutor renewal order and earnings for bundle subscription renewals.
+	 *
+	 * @since 1.0.0
+	 * @param object $morder    PMPro order object.
+	 * @param object $level     PMPro level object.
+	 * @param int    $bundle_id Bundle post ID.
+	 * @return void
+	 */
+	private function handle_bundle_renewal( $morder, $level, $bundle_id ) {
+		// Verify bundle exists
+		if ( ! get_post( $bundle_id ) || 'course-bundle' !== get_post_type( $bundle_id ) ) {
+			error_log( '[TP-PMPRO Earnings] Invalid bundle_id=' . $bundle_id . ' for renewal, skipping' );
+			return;
+		}
+
+		error_log( '[TP-PMPRO Earnings] Renewal is for bundle #' . $bundle_id );
+
+		// Get renewal amount (typically billing_amount, but use total from order if available)
+		$amount = ! empty( $morder->total ) ? $morder->total : $level->billing_amount;
+
+		// Get bundle prices
+		$bundle_prices = $this->calculate_bundle_prices( $bundle_id, $amount );
+
+		// Create minimal Tutor order record with TYPE_RENEWAL
+		$tutor_order_id = $this->create_tutor_order(
+			array(
+				'order_type'     => OrderModel::TYPE_RENEWAL,
+				'user_id'        => $morder->user_id,
+				'item_id'        => $bundle_id,
+				'item_type'      => 'bundle',
+				'amount'         => $amount,
+				'regular_price'  => $bundle_prices['regular_price'],
+				'sale_price'     => $bundle_prices['sale_price'],
+				'pmpro_order_id' => $morder->id,
+				'pmpro_level_id' => $level->id,
+			)
+		);
+
+		if ( ! $tutor_order_id ) {
+			error_log( '[TP-PMPRO Earnings] Failed to create Tutor renewal order for bundle PMPro order #' . $morder->id );
+			return;
+		}
+
+		// Calculate and store earnings using Tutor Core
+		$this->calculate_and_store_earnings( $tutor_order_id );
+
+		error_log( sprintf(
+			'[TP-PMPRO Earnings] Created renewal earnings for user %d, bundle %d, amount $%s (regular: $%s, sale: $%s) (PMPro order #%d, Tutor order #%d)',
+			$morder->user_id,
+			$bundle_id,
+			$amount,
+			$bundle_prices['regular_price'],
+			$bundle_prices['sale_price'],
 			$morder->id,
 			$tutor_order_id
 		) );
@@ -655,8 +819,12 @@ class PMPro_Earnings_Handler {
 	 *
 	 *     @type string $order_type     Order type (single_order, subscription, renewal).
 	 *     @type int    $user_id        User ID.
-	 *     @type int    $course_id      Course ID.
+	 *     @type int    $course_id      Course ID (for courses).
+	 *     @type int    $item_id        Item ID (for bundles, Phase 5).
+	 *     @type string $item_type      Item type: 'course' or 'bundle' (Phase 5).
 	 *     @type float  $amount         Amount paid.
+	 *     @type float  $regular_price  Regular price (for bundles, Phase 5).
+	 *     @type float  $sale_price     Sale price (for bundles, Phase 5).
 	 *     @type int    $pmpro_order_id PMPro order ID (for cross-reference).
 	 *     @type int    $pmpro_level_id PMPro level ID (for cross-reference).
 	 * }
@@ -669,15 +837,22 @@ class PMPro_Earnings_Handler {
 			'order_type'     => OrderModel::TYPE_SINGLE_ORDER,
 			'user_id'        => 0,
 			'course_id'      => 0,
+			'item_id'        => 0,        // Phase 5: For bundles
+			'item_type'      => 'course', // Phase 5: 'course' or 'bundle'
 			'amount'         => 0,
+			'regular_price'  => 0,        // Phase 5: For bundles
+			'sale_price'     => 0,        // Phase 5: For bundles
 			'pmpro_order_id' => 0,
 			'pmpro_level_id' => 0,
 		);
 
 		$args = wp_parse_args( $args, $defaults );
 
+		// Phase 5: Determine item_id (bundle or course)
+		$item_id = ! empty( $args['item_id'] ) ? $args['item_id'] : $args['course_id'];
+
 		// Validate required fields.
-		if ( empty( $args['user_id'] ) || empty( $args['course_id'] ) || empty( $args['amount'] ) ) {
+		if ( empty( $args['user_id'] ) || empty( $item_id ) || empty( $args['amount'] ) ) {
 			return false;
 		}
 
@@ -729,14 +904,19 @@ class PMPro_Earnings_Handler {
 		}
 
 		$order_id = $wpdb->insert_id;
-		error_log( '[TP-PMPRO Earnings] Created Tutor order #' . $order_id . ' (type: ' . $args['order_type'] . ', amount: $' . $args['amount'] . ')' );
+		error_log( '[TP-PMPRO Earnings] Created Tutor order #' . $order_id . ' (type: ' . $args['order_type'] . ', item_type: ' . $args['item_type'] . ', amount: $' . $args['amount'] . ')' );
 
-		// Insert order item (course link).
+		// Phase 5: Insert order item (course or bundle link)
+		// For bundles: regular_price = sum of courses, sale_price = what user paid
+		// For courses: regular_price = sale_price = amount paid
+		$regular_price = ! empty( $args['regular_price'] ) ? $args['regular_price'] : $args['amount'];
+		$sale_price    = ! empty( $args['sale_price'] ) ? $args['sale_price'] : $args['amount'];
+
 		$item_data = array(
 			'order_id'      => $order_id,
-			'item_id'       => $args['course_id'],
-			'regular_price' => $args['amount'],
-			'sale_price'    => (string) $args['amount'],
+			'item_id'       => $item_id,
+			'regular_price' => $regular_price,
+			'sale_price'    => (string) $sale_price,
 		);
 
 		$item_inserted = $wpdb->insert(
@@ -757,6 +937,51 @@ class PMPro_Earnings_Handler {
 		$this->add_order_meta( $order_id, 'pmpro_level_id', $args['pmpro_level_id'], $args['user_id'] );
 
 		return $order_id;
+	}
+
+	/**
+	 * Calculate bundle prices (Phase 5)
+	 *
+	 * Returns regular_price (sum of course prices) and sale_price (what user paid).
+	 * Matches Tutor LMS bundle pricing logic.
+	 *
+	 * @since 1.0.0
+	 * @param int   $bundle_id Bundle post ID.
+	 * @param float $amount_paid Amount user actually paid.
+	 * @return array {
+	 *     @type float $regular_price Sum of all course regular prices in bundle.
+	 *     @type float $sale_price    Bundle sale price (what user paid).
+	 * }
+	 */
+	private function calculate_bundle_prices( $bundle_id, $amount_paid ) {
+		$regular_price = 0;
+		$sale_price    = $amount_paid; // Default to amount paid
+
+		// Check if BundleModel exists
+		if ( ! class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
+			return array(
+				'regular_price' => $amount_paid,
+				'sale_price'    => $amount_paid,
+			);
+		}
+
+		// Get bundle regular price (sum of course prices)
+		// This matches Tutor LMS's BundleModel::get_bundle_regular_price()
+		$regular_price = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_regular_price( $bundle_id );
+
+		// Get bundle sale price (instructor-set price)
+		// This matches Tutor LMS's BundleModel::get_bundle_sale_price()
+		$bundle_sale_price = \TutorPro\CourseBundle\Models\BundleModel::get_bundle_sale_price( $bundle_id );
+
+		// Use bundle sale price if set, otherwise use amount paid
+		if ( $bundle_sale_price > 0 ) {
+			$sale_price = $bundle_sale_price;
+		}
+
+		return array(
+			'regular_price' => $regular_price,
+			'sale_price'    => $sale_price,
+		);
 	}
 
 	/**

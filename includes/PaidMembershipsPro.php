@@ -135,6 +135,10 @@ class PaidMembershipsPro {
         
         // Register frontend pricing/enrollment hooks on wp hook (ensures Tutor is loaded)
         add_action( 'wp', array( $this, 'init_pmpro_price_overrides' ), 20 );
+        
+        // Also register hooks for REST API requests (Gutenberg editor)
+        // Use priority 5 to ensure hooks are registered before REST routes are processed
+        add_action( 'rest_api_init', array( $this, 'init_pmpro_price_overrides' ), 5 );
 
 		if ( tutor_utils()->has_pmpro( true ) ) {
 			// Only wire PMPro behaviors when PMPro is the selected monetization engine (overridable via filter)
@@ -156,9 +160,13 @@ class PaidMembershipsPro {
 	 * @return void
 	 */
     public function init_pmpro_price_overrides() {
-        // Guard: only run on frontend, not admin
-        if ( is_admin() ) {
-            return;
+        // Guard: only run on frontend or REST API, not regular admin pages
+        // Allow REST API requests (Gutenberg editor) and AJAX to register hooks
+        if ( is_admin() && ! wp_doing_ajax() && ! ( defined( 'REST_REQUEST' ) && REST_REQUEST ) ) {
+            // Exception: if we're being called from rest_api_init hook, proceed anyway
+            if ( ! doing_action( 'rest_api_init' ) ) {
+                return;
+            }
         }
 
         // Guard: PMPro must be active and selected as monetization engine
