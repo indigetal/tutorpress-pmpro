@@ -815,20 +815,26 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( null === $price ) {
 			$price = get_post_meta( $bundle_id, 'tutor_course_price', true );
 		}
-		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
-		// Pass extracted values through context so reconcile_bundle_levels uses them instead of reading stale DB values
-		if ( ! isset( $this->reconcile_scheduled[ $bundle_id ] ) ) {
-			$this->reconcile_scheduled[ $bundle_id ] = true;
-			
-			add_action( 'shutdown', function() use ( $bundle_id, $so, $pt, $price ) {
-				$ctx = array( 'source' => 'shutdown' );
-				// Pass extracted values through context
-				if ( null !== $so ) { $ctx['selling_option'] = $so; }
-				if ( null !== $pt ) { $ctx['price_type'] = $pt; }
-				if ( null !== $price ) { $ctx['price'] = $price; }
-				$this->reconcile_bundle_levels( $bundle_id, $ctx );
-			}, 999 );
+		// Use a transient to prevent duplicate reconciliation across multiple requests
+		// This is needed because save_post hooks can fire in separate requests after REST completes
+		$reconcile_key = 'tp_pmpro_reconcile_' . $bundle_id;
+		if ( get_transient( $reconcile_key ) ) {
+			return;
 		}
+		set_transient( $reconcile_key, 1, 10 ); // 10-second window to prevent duplicates
+		
+		// Also mark in instance variable for same-request deduplication
+		$this->reconcile_scheduled[ $bundle_id ] = true;
+		
+		// Call reconciliation DIRECTLY instead of scheduling on shutdown
+		// This ensures we use the fresh context from the REST request, not stale DB values
+		$ctx = array( 'source' => 'rest_direct' );
+		// Pass extracted values through context
+		if ( null !== $so ) { $ctx['selling_option'] = $so; }
+		if ( null !== $pt ) { $ctx['price_type'] = $pt; }
+		if ( null !== $price ) { $ctx['price'] = $price; }
+		
+		$this->reconcile_bundle_levels( $bundle_id, $ctx );
 	}
 
 	/**
@@ -848,14 +854,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$this->log( '[TP-PMPRO] schedule_reconcile_bundle_levels skipped (not published); bundle=' . (int) $post_id );
 			return;
 		}
-		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
-		if ( ! isset( $this->reconcile_scheduled[ $post_id ] ) ) {
-			$this->reconcile_scheduled[ $post_id ] = true;
-			
-			add_action( 'shutdown', function() use ( $post_id ) {
-				$this->reconcile_bundle_levels( (int) $post_id, array( 'source' => 'shutdown' ) );
-			}, 999 );
+		// Skip if REST hook already reconciled recently (check transient)
+		$reconcile_key = 'tp_pmpro_reconcile_' . $post_id;
+		if ( get_transient( $reconcile_key ) ) {
+			return;
 		}
+		// Skip if this is a REST request (REST hook will handle it with proper context)
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			return;
+		}
+		// Skip if already scheduled in this request
+		if ( isset( $this->reconcile_scheduled[ $post_id ] ) ) {
+			return;
+		}
+		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
+		$this->reconcile_scheduled[ $post_id ] = true;
+		add_action( 'shutdown', function() use ( $post_id ) {
+			$this->reconcile_bundle_levels( (int) $post_id, array( 'source' => 'save_post' ) );
+		}, 999 );
 	}
 
 	/**
@@ -871,12 +887,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		if ( 'publish' === $new_status && 'publish' !== $old_status ) {
+			// Skip if this is a REST request (REST hook will handle it)
+			if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+				return;
+			}
 			// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
 			if ( ! isset( $this->reconcile_scheduled[ $post->ID ] ) ) {
 				$this->reconcile_scheduled[ $post->ID ] = true;
-				
 				add_action( 'shutdown', function() use ( $post ) {
-					$this->reconcile_bundle_levels( (int) $post->ID, array( 'source' => 'shutdown' ) );
+					$this->reconcile_bundle_levels( (int) $post->ID, array( 'source' => 'status_transition' ) );
 				}, 999 );
 			}
 		}
@@ -1328,8 +1347,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 */
 	public function reconcile_bundle_levels( $bundle_id, $ctx = array() ) {
 		$bundle_id = (int) $bundle_id;
+		
 		// Guard: only reconcile for published bundles
-		if ( 'publish' !== get_post_status( $bundle_id ) ) {
+		$status = get_post_status( $bundle_id );
+		if ( 'publish' !== $status ) {
 			$this->log( '[TP-PMPRO] reconcile_bundle_levels skipped (not published); bundle=' . $bundle_id );
 			return;
 		}
@@ -1526,13 +1547,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		// Step 2: Ensure exactly one one-time level exists (upsert logic)
 		$level_id = 0;
-		// For bundles, use calculated regular price; for courses, use meta field
-		if ( $post_type === 'course-bundle' ) {
-			$regular_price = $this->calculate_bundle_regular_price( $object_id );
-		} else {
-			$regular_price = get_post_meta( $object_id, 'tutor_course_price', true );
-			$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
-		}
+		// Get price based on post type
+		// BUNDLES: Use instructor-set bundle price directly (no sale price logic)
+		// COURSES: Use instructor-set regular price (will use sale price logic later)
+		$regular_price = get_post_meta( $object_id, 'tutor_course_price', true );
+		$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
 
 		if ( ! empty( $one_time ) ) {
 			// One-time level(s) exist: update the first one
@@ -1594,8 +1613,32 @@ if ( ! defined( 'ABSPATH' ) ) {
 			// Phase 5: Add level to course/bundle group
 			self::add_level_to_course_group( $object_id, $level_id, $post_type );
 			
-			// Step 3.5: Handle sale price for one-time purchase
-			$this->handle_sale_price_for_one_time( $object_id, $level_id, $regular_price, $post_type );
+			// Step 3.5: Handle pricing
+			if ( $post_type === 'course-bundle' ) {
+				// BUNDLES: Set price directly (no sale price logic)
+				// Bundle price is instructor-set and used as-is
+				
+				global $wpdb;
+				$wpdb->update(
+					$wpdb->pmpro_membership_levels,
+					array( 'initial_payment' => $regular_price ),
+					array( 'id' => $level_id ),
+					array( '%f' ),
+					array( '%d' )
+				);
+				
+				// Store bundle price in meta for reference
+				update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_price', $regular_price );
+				
+				// Store total course value for informational purposes
+				$total_value = $this->calculate_bundle_regular_price( $object_id );
+				update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_total_value', $total_value );
+				
+				$this->log( '[TP-PMPRO] handle_one_time_branch set_bundle_price level_id=' . $level_id . ' bundle=' . $object_id . ' price=' . $regular_price . ' total_value=' . $total_value );
+			} else{
+				// COURSES: Use full sale price logic (supports time-limited sales)
+				$this->handle_sale_price_for_one_time( $object_id, $level_id, $regular_price, $post_type );
+			}
 		}
 
 		// Step 4: Update meta with final level ID(s)
@@ -1609,7 +1652,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
-	 * Handle sale price storage for one-time purchase levels.
+	 * Handle sale price storage for one-time purchase levels (COURSES ONLY).
 	 * 
 	 * Implements PMPro sale price pattern:
 	 * 1. When sale active: level.initial_payment = sale_price, store regular_price in meta
@@ -1617,17 +1660,20 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * 
 	 * This ensures PMPro charges the sale price while maintaining both prices for display.
 	 * 
-	 * Supports both courses and bundles:
-	 * - Courses: regular_price is instructor-set, sale_price is instructor-set
-	 * - Bundles: regular_price is auto-calculated (sum of course prices), sale_price is instructor-set
+	 * NOTE: Bundles do NOT use this method. Bundle one-time purchases have a single price
+	 * (the instructor-set bundle price) with no sale price functionality. Bundle pricing
+	 * is handled directly in handle_one_time_branch().
+	 * 
+	 * Course pricing:
+	 * - regular_price: Instructor-set via tutor_course_price meta
+	 * - sale_price: Optional, instructor-set via tutor_course_sale_price meta
 	 * - Both prices stored in level meta for display (regular_price crossed out, sale_price primary)
 	 *
 	 * @since 1.5.0
-	 * @since 1.7.0 Added bundle support
-	 * @param int    $object_id     Course or bundle ID
+	 * @param int    $object_id     Course ID (bundles should not call this method)
 	 * @param int    $level_id      PMPro level ID
-	 * @param float  $regular_price Regular price for validation (auto-calculated for bundles, instructor-set for courses)
-	 * @param string $post_type     Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
+	 * @param float  $regular_price Regular price for validation (instructor-set)
+	 * @param string $post_type     Optional. Post type ('courses'). Auto-detected if not provided.
 	 * @return void
 	 */
 	private function handle_sale_price_for_one_time( $object_id, $level_id, $regular_price, $post_type = null ) {
@@ -1640,8 +1686,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$post_type = get_post_type( $object_id );
 		}
 
-		// Validate post type
-		if ( ! in_array( $post_type, array( 'courses', 'course-bundle' ), true ) ) {
+		// Guard: Bundles don't use sale price logic (they have a single price)
+		if ( 'course-bundle' === $post_type ) {
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] handle_sale_price_for_one_time skipped (bundles use direct pricing); bundle=' . $object_id . ' level=' . $level_id );
+			}
+			return;
+		}
+
+		// Validate post type (only courses should reach here)
+		if ( 'courses' !== $post_type ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] handle_sale_price_for_one_time skipped (invalid post_type: ' . $post_type . '); object=' . $object_id . ' level=' . $level_id );
 			}
