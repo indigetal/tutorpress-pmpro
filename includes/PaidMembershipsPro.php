@@ -82,6 +82,14 @@ class PaidMembershipsPro {
     private $sale_price_handler;
 
     /**
+     * Backend pricing service instance.
+     *
+     * @since 1.0.0
+     * @var \TUTORPRESS_PMPRO\Pricing\Backend_Pricing
+     */
+    private $backend_pricing;
+
+    /**
      * Enrollment handler service instance.
      *
      * @since 1.0.0
@@ -98,6 +106,7 @@ class PaidMembershipsPro {
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/access/class-access-checker.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/pricing/class-pricing-manager.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/pricing/class-sale-price-handler.php';
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/pricing/class-backend-pricing.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/enrollment/class-enrollment-handler.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/admin/class-level-settings.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/admin/class-admin-notices.php';
@@ -110,6 +119,7 @@ class PaidMembershipsPro {
         // Initialize services via container
         $this->access_checker      = Service_Container::get( 'access_checker' );
         $this->sale_price_handler  = Service_Container::get( 'sale_price_handler' );
+        $this->backend_pricing     = Service_Container::get( 'backend_pricing' );
         $this->enrollment_handler  = Service_Container::get( 'enrollment_handler' );
         $this->level_settings      = Service_Container::get( 'level_settings' );
         $this->admin_notices       = Service_Container::get( 'admin_notices' );
@@ -132,6 +142,9 @@ class PaidMembershipsPro {
         add_action( 'pmpro_membership_level_after_other_settings', array( $this->level_settings, 'display_courses_categories' ) );
         add_action( 'pmpro_save_membership_level', array( $this->level_settings, 'pmpro_settings' ) );
         add_filter( 'tutor/options/attr', array( $this->level_settings, 'add_options' ) );
+        
+        // Register backend pricing hooks (for admin/REST API display)
+        $this->backend_pricing->register_hooks();
         
         // Register frontend pricing/enrollment hooks on wp hook (ensures Tutor is loaded)
         add_action( 'wp', array( $this, 'init_pmpro_price_overrides' ), 20 );

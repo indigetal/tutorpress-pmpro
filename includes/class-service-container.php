@@ -82,24 +82,30 @@ class Service_Container {
 	 */
 	private static function create( $service_name ) {
 		switch ( $service_name ) {
-			// Core services (no dependencies)
-			case 'access_checker':
-				return new Access\Access_Checker();
+		// Core services (no dependencies)
+		case 'access_checker':
+			return new Access\Access_Checker();
 
-			case 'sale_price_handler':
-				return new Pricing\Sale_Price_Handler();
+		case 'sale_price_handler':
+			return new Pricing\Sale_Price_Handler();
 
-			case 'level_settings':
-				return new Admin\Level_Settings();
+		case 'level_settings':
+			return new Admin\Level_Settings();
 
-			case 'admin_notices':
-				return new Admin\Admin_Notices();
+		case 'admin_notices':
+			return new Admin\Admin_Notices();
 
-			// Services with dependencies
-			case 'enrollment_handler':
-				return new Enrollment\Enrollment_Handler(
-					self::get( 'access_checker' )
-				);
+		// Services with dependencies
+		case 'backend_pricing':
+			return new Pricing\Backend_Pricing(
+				self::get( 'access_checker' ),
+				self::get( 'sale_price_handler' )
+			);
+
+		case 'enrollment_handler':
+			return new Enrollment\Enrollment_Handler(
+				self::get( 'access_checker' )
+			);
 
 			default:
 				throw new \Exception( "Service '{$service_name}' not found in container." );
