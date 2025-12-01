@@ -303,7 +303,12 @@ class Pricing_Display {
 		}
 
 		// Check if this course/bundle has "membership" selling option - show "View Pricing" button
-		$selling_option = \TUTOR\Course::get_selling_option( $course_id );
+		// For courses, use Course::get_selling_option(); for bundles, read directly from meta
+		if ( ! $is_bundle ) {
+			$selling_option = \TUTOR\Course::get_selling_option( $course_id );
+		} else {
+			$selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
+		}
 		if ( \TUTOR\Course::SELLING_OPTION_MEMBERSHIP === $selling_option ) {
 			return $this->render_membership_price_button( $course_id );
 		}
