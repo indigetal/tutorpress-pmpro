@@ -50,10 +50,10 @@ class Admin_Notices {
 	}
 
 	/**
-	 * Display course association notice on PMPro level edit page.
+	 * Display course or bundle association notice on PMPro level edit page.
 	 *
 	 * Shows a notice when editing a membership level that is managed by TutorPress
-	 * for a specific course. Includes a link to edit the associated course.
+	 * for a specific course or bundle. Includes a link to edit the associated item.
 	 *
 	 * Displays after the "General Information" section.
 	 *
@@ -71,15 +71,28 @@ class Admin_Notices {
 			return;
 		}
 
-		// Check if this level is associated with a TutorPress course
+		// Check if this level is associated with a TutorPress course or bundle
 		$course_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true );
+		$bundle_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_id', true );
 
-		if ( empty( $course_id ) ) {
+		if ( empty( $course_id ) && empty( $bundle_id ) ) {
 			return; // Not a TutorPress-managed level
 		}
 
-		$course_title = get_the_title( $course_id );
-		$course_edit_url = admin_url( 'post.php?post=' . $course_id . '&action=edit' );
+		// Determine object type (course or bundle) and get appropriate data
+		if ( ! empty( $bundle_id ) ) {
+			$object_id = $bundle_id;
+			$object_title = get_the_title( $bundle_id );
+			$object_edit_url = admin_url( 'post.php?post=' . $bundle_id . '&action=edit' );
+			$object_type = 'bundle';
+			$heading_text = __( 'TutorPress Bundle Level', 'tutorpress-pmpro' );
+		} else {
+			$object_id = $course_id;
+			$object_title = get_the_title( $course_id );
+			$object_edit_url = admin_url( 'post.php?post=' . $course_id . '&action=edit' );
+			$object_type = 'course';
+			$heading_text = __( 'TutorPress Course Level', 'tutorpress-pmpro' );
+		}
 		
 		?>
 		<tr>
@@ -87,13 +100,13 @@ class Admin_Notices {
 				<div class="pmpro_course_association_notice" style="background: #f7f7f7; border-left: 4px solid #72aee6; padding: 12px 15px; margin: 10px 0;">
 					<p style="margin: 0; font-size: 13px; color: #333;">
 						<span class="dashicons dashicons-welcome-learn-more" style="font-size: 16px; vertical-align: middle; color: #72aee6;"></span>
-						<strong><?php esc_html_e( 'TutorPress Course Level', 'tutorpress-pmpro' ); ?></strong>
+						<strong><?php echo esc_html( $heading_text ); ?></strong>
 						<br>
 						<span style="margin-left: 22px; color: #666;">
 							<?php 
 							printf(
 								__( 'This membership level is managed by TutorPress for: %s', 'tutorpress-pmpro' ),
-								'<a href="' . esc_url( $course_edit_url ) . '" target="_blank" style="text-decoration: none;">' . esc_html( $course_title ) . ' <span class="dashicons dashicons-external" style="font-size: 14px; text-decoration: none;"></span></a>'
+								'<a href="' . esc_url( $object_edit_url ) . '" target="_blank" style="text-decoration: none;">' . esc_html( $object_title ) . ' <span class="dashicons dashicons-external" style="font-size: 14px; text-decoration: none;"></span></a>'
 							);
 							?>
 						</span>
@@ -114,8 +127,14 @@ class Admin_Notices {
 	 * - Displays regular price vs sale price
 	 * - Shows sale schedule (active dates or open-ended)
 	 * - Different styling for scheduled vs active sales
-	 * - Links to associated course for editing
+	 * - Links to associated course/bundle for editing
 	 * - Hides if sale has expired
+	 *
+	 * Note: One-time bundles do NOT show this notice because:
+	 * - For one-time bundles, the bundle price = initial_payment (not a sale price in PMPro)
+	 * - The sale_price meta is for frontend display only (auto-calculated regular vs instructor-set price)
+	 * Subscription bundles DO show this notice because:
+	 * - Subscription bundles support full sale pricing logic (same as courses)
 	 *
 	 * @since 1.5.0
 	 * @return void
@@ -131,11 +150,38 @@ class Admin_Notices {
 			return;
 		}
 
-		// Check if this level is associated with a TutorPress course
+		// Check if this level is associated with a TutorPress course or bundle
 		$course_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true );
+		$bundle_id = get_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_id', true );
 
-		if ( empty( $course_id ) ) {
+		if ( empty( $course_id ) && empty( $bundle_id ) ) {
 			return; // Not a TutorPress-managed level
+		}
+
+		// IMPORTANT: Bundle pricing differs by type
+		// - One-time bundles: bundle_price = initial_payment (NOT a sale price in PMPro)
+		//   → Skip sale notice (sale price meta is for frontend display only)
+		// - Subscription bundles: Full sale pricing support (like courses)
+		//   → Show sale notice (when applicable)
+		if ( ! empty( $bundle_id ) ) {
+			// For bundles, check if this is a one-time or subscription level
+			// One-time levels: initial_payment > 0, billing_amount = 0 (no recurring payments)
+			$level = pmpro_getLevel( $level_id );
+			
+			if ( $level && empty( $level->billing_amount ) ) {
+				// One-time bundle level - skip sale notice (sale price meta is display-only)
+				return;
+			}
+			// Subscription bundle level - continue to show sale notice (if configured)
+		}
+
+		// Determine object type for display purposes
+		if ( ! empty( $bundle_id ) ) {
+			$object_id = $bundle_id;
+			$object_type = 'bundle';
+		} else {
+			$object_id = $course_id;
+			$object_type = 'course';
 		}
 
 		// Check if sale price exists in meta
@@ -208,8 +254,8 @@ class Admin_Notices {
 		$sale_price_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( floatval( $sale_price ) ) : '$' . number_format( floatval( $sale_price ), 2 );
 		$regular_price_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( $regular_price ) : '$' . number_format( $regular_price, 2 );
 
-		$course_title = get_the_title( $course_id );
-		$course_edit_url = admin_url( 'post.php?post=' . $course_id . '&action=edit' );
+		$object_title = get_the_title( $object_id );
+		$object_edit_url = admin_url( 'post.php?post=' . $object_id . '&action=edit' );
 		
 		// Different styling for scheduled vs active sales
 		$bg_color = ( $sale_status === 'scheduled' ) ? '#fff3cd' : '#d7f1ff';
@@ -239,9 +285,11 @@ class Admin_Notices {
 			<?php endif; ?>
 			<p style="margin: 8px 0; font-style: italic; color: #666;">
 				<?php 
+				$associated_label = ( 'bundle' === $object_type ) ? __( 'bundle', 'tutorpress-pmpro' ) : __( 'course', 'tutorpress-pmpro' );
 				printf(
-					__( 'This sale is managed in the associated course: %s', 'tutorpress-pmpro' ),
-					'<a href="' . esc_url( $course_edit_url ) . '" target="_blank">' . esc_html( $course_title ) . '</a>'
+					__( 'This sale is managed in the associated %s: %s', 'tutorpress-pmpro' ),
+					$associated_label,
+					'<a href="' . esc_url( $object_edit_url ) . '" target="_blank">' . esc_html( $object_title ) . '</a>'
 				);
 				?>
 			</p>

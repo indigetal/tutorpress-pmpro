@@ -270,10 +270,27 @@ class Pricing_Display {
 				return $html;
 			}
 
-			// Keep enrollment display if user purchased this course individually (not via membership)
-			$is_enrolled = tutor_utils()->is_enrolled( $course_id );
-			if ( $is_enrolled && ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id ) ) {
-				return $html;
+			// Check if user is enrolled in this course
+			$is_enrolled = tutor_utils()->is_enrolled( $course_id, get_current_user_id() );
+			
+			// If enrolled, check if it's via PMPro membership (including bundle enrollments)
+			if ( $is_enrolled ) {
+				// Check enrollment meta to see if it's a PMPro membership enrollment
+				$enrollment_id = $this->get_enrollment_id( $course_id, get_current_user_id() );
+				if ( $enrollment_id ) {
+					$is_pmpro_enrollment = get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true ) ||
+										   get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true );
+					
+					// If enrolled via PMPro (regular or bundle), show enrollment status
+					if ( $is_pmpro_enrollment ) {
+						return $html;
+					}
+					
+					// If enrolled individually (not via membership), show enrollment status
+					if ( ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id, get_current_user_id() ) ) {
+						return $html;
+					}
+				}
 			}
 
 			// For all other cases in membership-only mode, show "View Pricing" button
@@ -300,6 +317,22 @@ class Pricing_Display {
 		}
 		if ( get_post_meta( $course_id, '_tutor_course_price_type', true ) === 'free' ) {
 			return $html;
+		}
+		
+		// Check if user is enrolled via PMPro membership (including bundle enrollments)
+		// If so, show enrollment status instead of pricing
+		$is_enrolled = tutor_utils()->is_enrolled( $course_id, get_current_user_id() );
+		if ( $is_enrolled ) {
+			$enrollment_id = $this->get_enrollment_id( $course_id, get_current_user_id() );
+			if ( $enrollment_id ) {
+				$is_pmpro_enrollment = get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true ) ||
+									   get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true );
+				
+				// If enrolled via PMPro (regular or bundle), show enrollment status
+				if ( $is_pmpro_enrollment ) {
+					return $html;
+				}
+			}
 		}
 
 		// Check if this course/bundle has "membership" selling option - show "View Pricing" button
@@ -1346,5 +1379,35 @@ class Pricing_Display {
 		$level_ids = array_filter( $level_ids ); // Remove zeros
 
 		return $level_ids;
+	}
+
+	/**
+	 * Get enrollment ID for a user's course enrollment.
+	 *
+	 * Helper method to retrieve the enrollment post ID for checking enrollment meta.
+	 * Used to determine if enrollment is via PMPro membership (including bundle enrollments).
+	 *
+	 * @since 1.0.0
+	 * @param int $course_id Course post ID.
+	 * @param int $user_id   User ID.
+	 * @return int|false Enrollment ID or false if not enrolled.
+	 */
+	private function get_enrollment_id( $course_id, $user_id ) {
+		if ( ! function_exists( 'tutor_utils' ) ) {
+			return false;
+		}
+
+		$enrollment_result = tutor_utils()->is_enrolled( $course_id, $user_id );
+		
+		// Handle both object and ID returns from is_enrolled()
+		if ( $enrollment_result ) {
+			if ( is_object( $enrollment_result ) && isset( $enrollment_result->ID ) ) {
+				return (int) $enrollment_result->ID;
+			} elseif ( is_numeric( $enrollment_result ) ) {
+				return (int) $enrollment_result;
+			}
+		}
+		
+		return false;
 	}
 }
