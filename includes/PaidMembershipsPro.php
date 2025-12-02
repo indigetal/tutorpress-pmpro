@@ -58,6 +58,14 @@ class PaidMembershipsPro {
     private $enrollment_ui;
 
     /**
+     * PMPro Orders Integration service instance.
+     *
+     * @since 1.0.0
+     * @var \TUTORPRESS_PMPRO\Frontend\Pmpro_Orders_Integration
+     */
+    private $pmpro_orders_integration;
+
+    /**
      * Level settings service instance.
      *
      * @since 1.0.0
@@ -112,6 +120,7 @@ class PaidMembershipsPro {
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/admin/class-admin-notices.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pricing-display.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrollment-ui.php';
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pmpro-orders-integration.php';
         
         // Load service container
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/class-service-container.php';
@@ -123,6 +132,9 @@ class PaidMembershipsPro {
         $this->enrollment_handler  = Service_Container::get( 'enrollment_handler' );
         $this->level_settings      = Service_Container::get( 'level_settings' );
         $this->admin_notices       = Service_Container::get( 'admin_notices' );
+        
+        // Store frontend services for later hook registration
+        $this->pmpro_orders_integration = Service_Container::get( 'pmpro_orders_integration' );
         
         // Initialize pricing_display (needs $this reference)
         $this->pricing_display = new \TUTORPRESS_PMPRO\Frontend\Pricing_Display(
@@ -194,6 +206,7 @@ class PaidMembershipsPro {
         // Register frontend service hooks
         $this->pricing_display->register_hooks();
         $this->enrollment_ui->register_hooks();
+        $this->pmpro_orders_integration->register_hooks();
     }
 
     /**

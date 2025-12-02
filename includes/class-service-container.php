@@ -102,6 +102,9 @@ class Service_Container {
 				self::get( 'sale_price_handler' )
 			);
 
+		case 'pmpro_orders_integration':
+			return new Frontend\Pmpro_Orders_Integration();
+
 		case 'enrollment_handler':
 			return new Enrollment\Enrollment_Handler(
 				self::get( 'access_checker' )
