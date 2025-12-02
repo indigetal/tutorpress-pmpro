@@ -3,14 +3,14 @@
  * Plugin Name: TutorPress - PMPro Integration
  * Plugin URI: https://www.paidmembershipspro.com/
  * Description: Integrate Paid Memberships Pro with Tutor LMS via the TutorPress addon.
- * Version: 0.1.77
+ * Version: 0.1.78
  * Author: Indigetal WebCraft
  * Text Domain: tutorpress-pmpro
  */
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'TUTORPRESS_PMPRO_VERSION', '0.1.77' );
+define( 'TUTORPRESS_PMPRO_VERSION', '0.1.78' );
 define( 'TUTORPRESS_PMPRO_FILE', __FILE__ );
 define( 'TUTORPRESS_PMPRO_DIR', plugin_dir_path( __FILE__ ) );
 define( 'TUTORPRESS_PMPRO_BASENAME', plugin_basename( __FILE__ ) );
@@ -58,7 +58,6 @@ if ( ! function_exists( 'TUTORPRESS_PMPRO' ) ) {
 require_once TUTORPRESS_PMPRO_DIR . 'includes/init.php';
 require_once TUTORPRESS_PMPRO_DIR . 'includes/earnings/class-pmpro-earnings-handler.php';
 require_once TUTORPRESS_PMPRO_DIR . 'includes/admin/class-earnings-debug-page.php';
-require_once TUTORPRESS_PMPRO_DIR . 'includes/admin/class-withdraw-debug-page.php';
 
 // Instantiate the integration.
 if ( class_exists( '\\TUTORPRESS_PMPRO\\Init' ) ) {
@@ -138,8 +137,5 @@ require_once TUTORPRESS_PMPRO_DIR . 'includes/multisite/class-cart-table-fix.php
 require_once TUTORPRESS_PMPRO_DIR . 'includes/multisite/class-withdraw-summary-fix.php';
 \TUTORPRESS_PMPRO\Multisite\Withdraw_Summary_Fix::init();
 
-// Admin debug tools.
-if ( is_admin() ) {
-	\TUTORPRESS_PMPRO\Withdraw_Debug_Page::init();
-}
+// Admin debug tools are now consolidated in the Commissions Log tab (Tutor > Tools)
 

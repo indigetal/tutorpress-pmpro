@@ -48,9 +48,9 @@ class Earnings_Debug_Page {
 	 */
 	public static function add_tools_tab( $attr_tools ) {
 		$attr_tools['earnings_debug'] = array(
-			'label'     => __( 'Earnings Debug', 'tutorpress-pmpro' ),
+			'label'     => __( 'Commissions Log', 'tutorpress-pmpro' ),
 			'slug'      => 'earnings_debug',
-			'desc'      => __( 'Debug and maintain revenue sharing earnings data', 'tutorpress-pmpro' ),
+			'desc'      => __( 'Debug and maintain revenue sharing earnings and withdrawal data', 'tutorpress-pmpro' ),
 			'template'  => 'earnings-debug',
 			'view_path' => TUTORPRESS_PMPRO_DIR . 'views/tools/',
 			'icon'      => 'tutor-icon-dollar',
@@ -211,6 +211,133 @@ class Earnings_Debug_Page {
 			'message' => $result['message'],
 			'deleted' => $result['deleted'],
 		) );
+	}
+
+	/**
+	 * Get withdrawal summary for an instructor (extracted from Withdraw_Debug_Page)
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int $instructor_id Instructor user ID.
+	 * @return array|null Withdrawal summary or null if not available.
+	 */
+	public static function get_instructor_withdrawal_summary( $instructor_id ) {
+		// Try both possible namespaces for WithdrawModel
+		$withdraw_model_class = null;
+		if ( class_exists( '\Tutor\Models\WithdrawModel' ) ) {
+			$withdraw_model_class = '\Tutor\Models\WithdrawModel';
+		} elseif ( class_exists( '\TUTOR\WithdrawModel' ) ) {
+			$withdraw_model_class = '\TUTOR\WithdrawModel';
+		}
+
+		if ( $withdraw_model_class ) {
+			return call_user_func( array( $withdraw_model_class, 'get_withdraw_summary' ), $instructor_id );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Get raw earnings records for an instructor
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int $instructor_id Instructor user ID.
+	 * @return array Earnings records.
+	 */
+	public static function get_instructor_earnings( $instructor_id ) {
+		global $wpdb;
+
+		return $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT earning_id, order_id, user_id, course_id, order_status, instructor_amount, admin_amount, course_price_total, created_at
+				 FROM {$wpdb->prefix}tutor_earnings
+				 WHERE user_id = %d
+				 ORDER BY created_at DESC
+				 LIMIT 20",
+				$instructor_id
+			)
+		);
+	}
+
+	/**
+	 * Get raw withdrawal records for an instructor
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int $instructor_id Instructor user ID.
+	 * @return array Withdrawal records.
+	 */
+	public static function get_instructor_withdrawals( $instructor_id ) {
+		global $wpdb;
+
+		return $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT id, user_id, amount, method_data, status, created_at
+				 FROM {$wpdb->prefix}tutor_withdraws
+				 WHERE user_id = %d
+				 ORDER BY created_at DESC
+				 LIMIT 20",
+				$instructor_id
+			)
+		);
+	}
+
+	/**
+	 * Calculate manual withdrawal summary for an instructor
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int $instructor_id Instructor user ID.
+	 * @return array Manual calculation breakdown.
+	 */
+	public static function get_manual_withdrawal_calculation( $instructor_id ) {
+		global $wpdb;
+
+		$maturity_days = function_exists( 'tutor_utils' ) ? tutor_utils()->get_option( 'minimum_days_for_balance_to_be_available' ) : 30;
+
+		$total_income = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT SUM(instructor_amount) FROM {$wpdb->prefix}tutor_earnings WHERE order_status='completed' AND user_id=%d",
+				$instructor_id
+			)
+		);
+
+		$total_withdraw = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT SUM(amount) FROM {$wpdb->prefix}tutor_withdraws WHERE status='approved' AND user_id=%d",
+				$instructor_id
+			)
+		);
+
+		$total_pending = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT SUM(amount) FROM {$wpdb->prefix}tutor_withdraws WHERE status='pending' AND user_id=%d",
+				$instructor_id
+			)
+		);
+
+		$total_matured = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT SUM(instructor_amount) FROM {$wpdb->prefix}tutor_earnings 
+				 WHERE order_status='completed' AND user_id=%d AND DATEDIFF(NOW(), created_at) >= %d",
+				$instructor_id,
+				$maturity_days
+			)
+		);
+
+		$current_balance = (float) $total_income - (float) $total_withdraw;
+		$available_for_withdraw = max( 0, (float) $total_matured - (float) $total_withdraw );
+
+		return array(
+			'total_income'           => (float) $total_income,
+			'total_withdrawn'        => (float) $total_withdraw,
+			'total_pending'          => (float) $total_pending,
+			'total_matured'          => (float) $total_matured,
+			'maturity_days'          => $maturity_days,
+			'current_balance'        => $current_balance,
+			'available_for_withdraw' => $available_for_withdraw,
+		);
 	}
 }
 
