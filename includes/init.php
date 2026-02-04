@@ -2545,8 +2545,35 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 */
 	private function provide_woocommerce_stubs() {
 		// Only provide stubs if WooCommerce is not active
+		// Check function/class existence first (fast path if WooCommerce already loaded)
 		if ( function_exists( '\wc_get_product' ) || class_exists( 'WooCommerce' ) ) {
 			return;
+		}
+		
+		// Check if WooCommerce is in active plugins list (handles load order race condition)
+		// This is necessary because our plugin may load before WooCommerce alphabetically
+		$active_plugins = (array) get_option( 'active_plugins', array() );
+		foreach ( $active_plugins as $plugin ) {
+			if ( strpos( $plugin, 'woocommerce.php' ) !== false ) {
+				// WooCommerce is active but hasn't loaded yet - don't provide stubs
+				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+					error_log( '[TP-PMPRO] WooCommerce detected in active plugins, skipping stub functions' );
+				}
+				return;
+			}
+		}
+		
+		// Also check multisite network-activated plugins
+		if ( is_multisite() ) {
+			$network_plugins = (array) get_site_option( 'active_sitewide_plugins', array() );
+			foreach ( array_keys( $network_plugins ) as $plugin ) {
+				if ( strpos( $plugin, 'woocommerce.php' ) !== false ) {
+					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+						error_log( '[TP-PMPRO] WooCommerce detected in network plugins, skipping stub functions' );
+					}
+					return;
+				}
+			}
 		}
 		
 		// Define stub functions in global namespace using eval()
