@@ -723,6 +723,69 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * Toggle allow_signups for all PMPro levels associated with a post.
+	 *
+	 * Discovers levels via pmpro_memberships_pages associations and
+	 * _tutorpress_pmpro_levels post meta (same pattern as delete handler).
+	 *
+	 * @param int $post_id  The course or bundle post ID.
+	 * @param int $value    1 to enable signups, 0 to disable.
+	 * @return void
+	 */
+	private function toggle_allow_signups( $post_id, $value ) {
+		global $wpdb;
+
+		$post_id   = (int) $post_id;
+		$value     = (int) $value;
+		$post_type = get_post_type( $post_id );
+
+		// Discover all PMPro level IDs associated with this post
+		$level_ids = array();
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$level_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
+				$post_id
+			) );
+		}
+		$meta_ids = get_post_meta( $post_id, '_tutorpress_pmpro_levels', true );
+		if ( is_array( $meta_ids ) ) {
+			$level_ids = array_merge( $level_ids, $meta_ids );
+		}
+		// Reverse meta lookup: check level meta for tutorpress_course_id or tutorpress_bundle_id
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$meta_key = ( 'course-bundle' === $post_type ) ? 'tutorpress_bundle_id' : 'tutorpress_course_id';
+			$reverse_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
+				$meta_key,
+				(string) $post_id
+			) );
+			if ( ! empty( $reverse_ids ) ) {
+				$level_ids = array_merge( $level_ids, $reverse_ids );
+			}
+		}
+		$level_ids = array_values( array_unique( array_map( 'intval', (array) $level_ids ) ) );
+
+		if ( empty( $level_ids ) ) {
+			return;
+		}
+
+		// Update allow_signups for each level
+		if ( isset( $wpdb->pmpro_membership_levels ) ) {
+			foreach ( $level_ids as $lid ) {
+				$wpdb->update(
+					$wpdb->pmpro_membership_levels,
+					array( 'allow_signups' => $value ),
+					array( 'id' => $lid ),
+					array( '%d' ),
+					array( '%d' )
+				);
+			}
+		}
+
+		$this->log( '[TP-PMPRO] toggle_allow_signups: post=' . $post_id . ' value=' . $value . ' levels=' . implode( ',', $level_ids ) );
+	}
+
+	/**
 	 * Status transition entrypoint (scaffold w/ logs).
 	 *
 	 * @param string  $new_status
@@ -735,6 +798,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		if ( 'publish' === $new_status && 'publish' !== $old_status ) {
+			// Enable signups for all associated levels
+			$this->toggle_allow_signups( $post->ID, 1 );
+
 			// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
 			if ( ! isset( $this->reconcile_scheduled[ $post->ID ] ) ) {
 				$this->reconcile_scheduled[ $post->ID ] = true;
@@ -743,6 +809,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 					$this->reconcile_course_levels( (int) $post->ID, array( 'source' => 'shutdown' ) );
 				}, 999 );
 			}
+		} elseif ( 'publish' === $old_status && 'publish' !== $new_status ) {
+			// Unpublished: disable signups for all associated levels
+			$this->toggle_allow_signups( $post->ID, 0 );
 		}
 	}
 
@@ -887,7 +956,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return;
 		}
 		if ( 'publish' === $new_status && 'publish' !== $old_status ) {
-			// Skip if this is a REST request (REST hook will handle it)
+			// Enable signups for all associated levels
+			$this->toggle_allow_signups( $post->ID, 1 );
+
+			// Skip reconciliation if this is a REST request (REST hook will handle it)
 			if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
 				return;
 			}
@@ -898,6 +970,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 					$this->reconcile_bundle_levels( (int) $post->ID, array( 'source' => 'status_transition' ) );
 				}, 999 );
 			}
+		} elseif ( 'publish' === $old_status && 'publish' !== $new_status ) {
+			// Unpublished: disable signups for all associated levels
+			$this->toggle_allow_signups( $post->ID, 0 );
 		}
 	}
 
