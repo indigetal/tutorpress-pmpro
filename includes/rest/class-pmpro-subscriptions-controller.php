@@ -637,22 +637,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return new WP_Error( 'level_not_found', __( 'PMPro level not found.', 'tutorpress-pmpro' ), [ 'status' => 404 ] );
 		}
 
-		// Publish guard: if an object_id/course_id is provided and not published, skip PMPro updates
 		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
 		$object_info = null;
 		if ( $object_id ) {
 			$object_info = $this->detect_object_type( $object_id );
-			$status = get_post_status( (int) $object_id );
-			if ( 'publish' !== $status ) {
-				// Return a UI-shaped payload to keep editor stable, marked as queued
-				$mapper = new \TutorPress_PMPro_Mapper();
-				$incoming = $mapper->map_ui_to_pmpro( $request->get_params() );
-				$queued_level = (object) array_merge( (array) $level, $incoming );
-				$payload = $mapper->map_pmpro_to_ui( $queued_level );
-				if ( is_array( $payload ) ) { $payload['queued'] = true; $payload['status'] = 'pending_publish'; }
-				$object_label = $object_info['label'];
-				return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, sprintf( __( 'Plan update queued: %s is not published. Updates will apply on publish.', 'tutorpress-pmpro' ), $object_label ) ) );
-			}
 		}
 
 		// Prepare update fields
