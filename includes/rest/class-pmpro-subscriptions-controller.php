@@ -289,20 +289,6 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 		$this->log( '[TP-PMPRO] get_course_subscriptions filter: plans_after_filter=' . count( $plans ) );
 
-		// If course is not published, also include any pending (queued) plans stored in meta
-		$status = get_post_status( (int) $course_id );
-		if ( 'publish' !== $status ) {
-			$pending = get_post_meta( $course_id, '_tutorpress_pmpro_pending_plans', true );
-			if ( is_array( $pending ) && ! empty( $pending ) ) {
-				$mapper = isset( $mapper ) ? $mapper : new \TutorPress_PMPro_Mapper();
-				foreach ( $pending as $pp ) {
-					$ui = $mapper->map_pmpro_to_ui( (object) array_merge( array( 'id' => 0 ), $mapper->map_ui_to_pmpro( (array) $pp ) ) );
-					if ( is_array( $ui ) ) { $ui['queued'] = true; $ui['status'] = 'pending_publish'; }
-					$plans[] = $ui;
-				}
-			}
-		}
-
 		// Add membership mode metadata for frontend (Phase 3 integration)
 		$metadata = array(
 			'has_full_site_levels' => false,
@@ -402,20 +388,6 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			$plans = array_values( $plans );
 		}
 		$this->log( '[TP-PMPRO] get_bundle_subscriptions filter: plans_after_filter=' . count( $plans ) );
-
-		// If bundle is not published, also include any pending (queued) plans stored in meta
-		$status = get_post_status( (int) $bundle_id );
-		if ( 'publish' !== $status ) {
-			$pending = get_post_meta( $bundle_id, '_tutorpress_pmpro_pending_plans', true );
-			if ( is_array( $pending ) && ! empty( $pending ) ) {
-				$mapper = isset( $mapper ) ? $mapper : new \TutorPress_PMPro_Mapper();
-				foreach ( $pending as $pp ) {
-					$ui = $mapper->map_pmpro_to_ui( (object) array_merge( array( 'id' => 0 ), $mapper->map_ui_to_pmpro( (array) $pp ) ) );
-					if ( is_array( $ui ) ) { $ui['queued'] = true; $ui['status'] = 'pending_publish'; }
-					$plans[] = $ui;
-				}
-			}
-		}
 
 		// Add membership mode metadata for frontend (Phase 3 integration)
 		$metadata = array(
