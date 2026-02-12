@@ -466,28 +466,6 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return $validation;
 		}
 
-		// Publish guard: do not create PMPro levels for drafts/unpublished content
-		$status = get_post_status( (int) $object_id );
-		if ( 'publish' !== $status ) {
-			// Persist pending plan for later creation on publish
-			$pending_key = '_tutorpress_pmpro_pending_plans';
-			$pending = get_post_meta( (int) $object_id, $pending_key, true );
-			if ( ! is_array( $pending ) ) { $pending = array(); }
-			$incoming = $request->get_params();
-			$incoming['__ts'] = current_time( 'timestamp' );
-			$pending[] = $incoming;
-			update_post_meta( (int) $object_id, $pending_key, $pending );
-
-			// Build a UI-shaped payload so the editor can continue without crashing
-			$mapper = new \TutorPress_PMPro_Mapper();
-			$level_data = $mapper->map_ui_to_pmpro( $request->get_params() );
-			$queued_level = (object) array_merge( array( 'id' => 0 ), $level_data );
-			$payload = $mapper->map_pmpro_to_ui( $queued_level );
-			if ( is_array( $payload ) ) { $payload['queued'] = true; $payload['status'] = 'pending_publish'; }
-			$object_label = $object_info['label'];
-			return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, sprintf( __( 'Plan queued: %s is not published. Levels will be created on publish.', 'tutorpress-pmpro' ), $object_label ) ) );
-		}
-
 		if ( ! function_exists( 'pmpro_insert_or_replace' ) && ! class_exists( 'PMPro_Membership_Level' ) ) {
 			return TutorPress_Subscription_Utils::format_error_response( __( 'Paid Memberships Pro is not available for creating levels.', 'tutorpress-pmpro' ), 'pmpro_not_available', 400 );
 		}
@@ -523,6 +501,12 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			} else {
 				$db_level_data['name'] = sprintf( 'One-time plan for %s', $object_id_for_name ? $object_id_for_name : 'site' );
 			}
+		}
+
+		// Suppress signups for non-published posts; allow_signups toggled on publish (Step 4)
+		$post_status = get_post_status( (int) $object_id );
+		if ( 'publish' !== $post_status ) {
+			$db_level_data['allow_signups'] = 0;
 		}
 
 		// Insert level using PMPro helper if available
