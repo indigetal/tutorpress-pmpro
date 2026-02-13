@@ -626,11 +626,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	public function reconcile_course_levels_rest( $post, $request, $creating ) {
 		$course_id = is_object( $post ) ? (int) $post->ID : (int) $post;
 		$error_prefix = '[TP-PMPRO] reconcile_course_levels_rest';
-		// Guard: only proceed for published courses
-		if ( 'publish' !== get_post_status( $course_id ) ) {
-			$this->log( $error_prefix . ' skipped (not published); course=' . $course_id );
-			return;
-		}
 
 		// Extract context from REST request (check both top-level and meta object)
 		$so_keys = array( 'selling_option', 'tutor_course_selling_option' );
@@ -705,11 +700,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 */
 	public function schedule_reconcile_course_levels( $post_id, $post, $update ) {
 		if ( 'courses' !== get_post_type( $post_id ) ) {
-			return;
-		}
-		// Guard: only schedule reconcile for published courses
-		if ( 'publish' !== get_post_status( $post_id ) ) {
-			$this->log( '[TP-PMPRO] schedule_reconcile_course_levels skipped (not published); course=' . (int) $post_id );
 			return;
 		}
 		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
@@ -826,11 +816,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	public function reconcile_bundle_levels_rest( $post, $request, $creating ) {
 		$bundle_id = is_object( $post ) ? (int) $post->ID : (int) $post;
 		$error_prefix = '[TP-PMPRO] reconcile_bundle_levels_rest';
-		// Guard: only proceed for published bundles
-		if ( 'publish' !== get_post_status( $bundle_id ) ) {
-			$this->log( $error_prefix . ' skipped (not published); bundle=' . $bundle_id );
-			return;
-		}
 
 		// Extract context from REST request (check both top-level and meta object)
 		$so_keys = array( 'selling_option', 'tutor_course_selling_option' );
@@ -916,11 +901,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 */
 	public function schedule_reconcile_bundle_levels( $post_id, $post, $update ) {
 		if ( 'course-bundle' !== get_post_type( $post_id ) ) {
-			return;
-		}
-		// Guard: only schedule reconcile for published bundles
-		if ( 'publish' !== get_post_status( $post_id ) ) {
-			$this->log( '[TP-PMPRO] schedule_reconcile_bundle_levels skipped (not published); bundle=' . (int) $post_id );
 			return;
 		}
 		// Skip if REST hook already reconciled recently (check transient)
@@ -1313,11 +1293,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 */
 	public function reconcile_course_levels( $course_id, $ctx = array() ) {
 		$course_id = (int) $course_id;
-		// Guard: only reconcile for published courses
-		if ( 'publish' !== get_post_status( $course_id ) ) {
-			$this->log( '[TP-PMPRO] reconcile_course_levels skipped (not published); course=' . $course_id );
-			return;
-		}
 		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
 
 		// Step 0: Acquire short-lived lock to prevent concurrent double-runs
@@ -1362,6 +1337,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
 		}
 		} finally {
+			// Safety net: ensure levels for non-published courses have signups disabled.
+			// Branch handlers (one_time, both/all) may auto-create levels with allow_signups=1 (MySQL default).
+			if ( 'publish' !== get_post_status( $course_id ) ) {
+				$this->toggle_allow_signups( $course_id, 0 );
+			}
 			// Always cleanup lock, even if exception or early return
 			delete_transient( $lock_key );
 		}
@@ -1376,13 +1356,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 */
 	public function reconcile_bundle_levels( $bundle_id, $ctx = array() ) {
 		$bundle_id = (int) $bundle_id;
-		
-		// Guard: only reconcile for published bundles
-		$status = get_post_status( $bundle_id );
-		if ( 'publish' !== $status ) {
-			$this->log( '[TP-PMPRO] reconcile_bundle_levels skipped (not published); bundle=' . $bundle_id );
-			return;
-		}
 		$src = is_array( $ctx ) && isset( $ctx['source'] ) ? $ctx['source'] : 'scheduled';
 
 		// Step 0: Acquire short-lived lock to prevent concurrent double-runs
@@ -1434,6 +1407,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 			update_post_meta( $bundle_id, '_tutorpress_pmpro_levels', $state['valid_ids'] );
 		}
 		} finally {
+			// Safety net: ensure levels for non-published bundles have signups disabled.
+			if ( 'publish' !== get_post_status( $bundle_id ) ) {
+				$this->toggle_allow_signups( $bundle_id, 0 );
+			}
 			// Always cleanup lock, even if exception or early return
 			delete_transient( $lock_key );
 		}
