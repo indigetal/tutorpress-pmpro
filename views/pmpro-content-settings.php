@@ -71,7 +71,21 @@
 				<tr class="membership_categories membership_course_categories" style="display: <?php echo esc_attr( 'category_wise_membership' === $membership_model ? '' : 'none' ); ?>;">
 					<th width="200"><label><?php esc_html_e( 'Course Categories', 'tutorpress-pmpro' ); ?>:</label></th>
 					<td>
-						<?php generate_categories_for_pmpro( tutor_utils()->get_course_categories(), $level_categories ); ?>
+						<?php
+						$course_cats = tutor_utils()->get_course_categories();
+						?>
+						<p><?php esc_html_e( 'Select:', 'tutorpress-pmpro' ); ?> <a id="tutorpress-pmpro-course-categories-select-all" href="javascript:void(0);"><?php esc_html_e( 'All', 'tutorpress-pmpro' ); ?></a> | <a id="tutorpress-pmpro-course-categories-select-none" href="javascript:void(0);"><?php esc_html_e( 'None', 'tutorpress-pmpro' ); ?></a></p>
+						<?php
+						$checklist_classes   = array( 'pmpro_checkbox_box' );
+						$course_cats_count   = is_array( $course_cats ) ? count( $course_cats ) : 0;
+						if ( $course_cats_count > 5 ) {
+							$checklist_classes[] = 'pmpro_scrollable';
+						}
+						$checklist_class_attr = implode( ' ', array_unique( $checklist_classes ) );
+						?>
+						<div id="tutorpress-pmpro-course-categories-checklist" class="<?php echo esc_attr( $checklist_class_attr ); ?>">
+							<?php generate_categories_for_pmpro( $course_cats, $level_categories ); ?>
+						</div>
 					</td>
 				</tr>
 
