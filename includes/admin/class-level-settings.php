@@ -216,6 +216,8 @@ class Level_Settings {
 
 		if ( $TUTORPRESS_PMPRO_membership_model ) {
 			update_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_membership_model', $TUTORPRESS_PMPRO_membership_model );
+		} else {
+			delete_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_membership_model' );
 		}
 
 		if ( $highlight_level && 1 == $highlight_level ) {
@@ -326,11 +328,12 @@ class Level_Settings {
 
 			if ( is_array( $cats ) && count( $cats ) ) {
 				global $wpdb;
-				$cats_str   = \TUTOR\QueryHelper::prepare_in_clause( $cats );
-				$terms      = $wpdb->get_results( "SELECT * FROM {$wpdb->terms} WHERE term_id IN (" . $cats_str . ')' );
+				$placeholders = implode( ', ', array_fill( 0, count( $cats ), '%d' ) );
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- placeholders are generated above.
+				$terms = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$wpdb->terms} WHERE term_id IN ($placeholders)", array_map( 'absint', $cats ) ) );
 				$term_links = array_map(
 					function( $term ) {
-						return '<small>' . $term->name . '</small>';
+						return '<small>' . esc_html( $term->name ) . '</small>';
 					},
 					$terms
 				);
