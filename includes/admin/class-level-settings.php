@@ -393,6 +393,13 @@ class Level_Settings {
 		$screen = get_current_screen();
 		if ( 'memberships_page_pmpro-membershiplevels' === $screen->id ) {
 			wp_enqueue_style( 'tutorpress-pmpro', \TUTORPRESS_PMPRO()->url . 'assets/css/pm-pro.css', array(), TUTORPRESS_PMPRO_VERSION );
+			wp_enqueue_script(
+				'tutorpress-pmpro-admin',
+				\TUTORPRESS_PMPRO()->url . 'assets/js/pmpro-admin.js',
+				array(),
+				TUTORPRESS_PMPRO_VERSION,
+				true
+			);
 		}
 	}
 

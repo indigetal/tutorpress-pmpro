@@ -46,7 +46,12 @@
 		var select = document.getElementById( 'TUTORPRESS_PMPRO_membership_model_select' );
 		syncCourseCategoryRow();
 		if ( select ) {
-			select.addEventListener( 'change', syncCourseCategoryRow );
+			// Select2 fires jQuery events, not native DOM events — use jQuery when available.
+			if ( window.jQuery ) {
+				window.jQuery( select ).on( 'change', syncCourseCategoryRow );
+			} else {
+				select.addEventListener( 'change', syncCourseCategoryRow );
+			}
 		}
 		bindSelectAllNone();
 	}
