@@ -286,8 +286,13 @@ class Backend_Pricing {
 			return $info;
 		}
 
+		$object_id = isset( $post->ID ) ? (int) $post->ID : 0;
+		if ( ! $object_id ) {
+			return $info;
+		}
+
 		// Get PMPro pricing for this course/bundle
-		$pmpro_prices = $this->get_pmpro_backend_pricing( $post->ID );
+		$pmpro_prices = $this->get_pmpro_backend_pricing( $object_id );
 
 		if ( $pmpro_prices ) {
 			// Inject regular price (what the backend displays as "price")
@@ -295,6 +300,72 @@ class Backend_Pricing {
 
 			// Inject sale price (if applicable)
 			$info['sale_price'] = $pmpro_prices->sale_price;
+		}
+
+		// Plans for Tutor manual enrollment UI (same shape as native + map_pmpro_to_ui).
+		if ( function_exists( 'pmpro_getLevel' ) ) {
+			$level_ids = array();
+			$mapped    = get_post_meta( $object_id, '_tutorpress_pmpro_levels', true );
+			if ( ! empty( $mapped ) && is_array( $mapped ) ) {
+				foreach ( $mapped as $k => $v ) {
+					$level_ids[] = (int) $v;
+				}
+			} elseif ( function_exists( 'pmpro_getAllLevels' ) ) {
+				$post_type = get_post_type( $object_id );
+				$meta_key  = ( 'course-bundle' === $post_type ) ? 'tutorpress_bundle_id' : 'tutorpress_course_id';
+				$all_levels = pmpro_getAllLevels( true, true );
+				foreach ( $all_levels as $lvl ) {
+					$assoc = get_pmpro_membership_level_meta( $lvl->id, $meta_key, true );
+					if ( $assoc && (int) $assoc === $object_id ) {
+						$level_ids[] = (int) $lvl->id;
+					}
+				}
+			}
+
+			$level_ids = array_values( array_unique( array_filter( $level_ids ) ) );
+			$plans     = array();
+			if ( ! empty( $level_ids ) ) {
+				if ( ! class_exists( 'TutorPress_PMPro_Mapper' ) ) {
+					$mapper_file = dirname( __DIR__ ) . '/utilities/class-pmpro-mapper.php';
+					if ( file_exists( $mapper_file ) ) {
+						require_once $mapper_file;
+					}
+				}
+				if ( ! class_exists( 'TutorPress_PMPro_Mapper' ) ) {
+					return $info;
+				}
+				$mapper = new \TutorPress_PMPro_Mapper();
+				foreach ( $level_ids as $lid ) {
+					$level = pmpro_getLevel( $lid );
+					if ( ! $level ) {
+						continue;
+					}
+					$plans[] = $mapper->map_pmpro_to_ui( $level );
+				}
+			}
+
+			$selling_option = get_post_meta( $object_id, 'tutor_course_selling_option', true );
+			if ( ! empty( $plans ) && ! empty( $selling_option ) ) {
+				$plans = array_values(
+					array_filter(
+						$plans,
+						function ( $plan ) use ( $selling_option ) {
+							$plan_type = isset( $plan['payment_type'] ) ? $plan['payment_type'] : 'recurring';
+							if ( 'one_time' === $selling_option ) {
+								return 'one_time' === $plan_type;
+							}
+							if ( 'subscription' === $selling_option ) {
+								return 'recurring' === $plan_type;
+							}
+							return true;
+						}
+					)
+				);
+			}
+
+			if ( ! empty( $plans ) ) {
+				$info['plans'] = $plans;
+			}
 		}
 
 		return $info;
