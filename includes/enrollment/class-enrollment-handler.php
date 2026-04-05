@@ -275,8 +275,11 @@ class Enrollment_Handler {
 				if ( ! $student_id || ! function_exists( 'pmpro_changeMembershipLevel' ) ) {
 					continue;
 				}
-				pmpro_changeMembershipLevel( $one_time_level_id, $student_id );
+				// Set pending meta BEFORE the level change so the synchronous
+				// pmpro_after_change_membership_level handler can see it and
+				// skip its own do_enroll() for this user+course pair.
 				$this->pending_manual_meta[ "{$student_id}_{$course_id}" ] = $one_time_level_id;
+				pmpro_changeMembershipLevel( $one_time_level_id, $student_id );
 			}
 		}
 
@@ -470,12 +473,18 @@ class Enrollment_Handler {
 			$new_courses = $this->filter_courses_by_pricing( $new_course_data );
 
 			foreach ( $new_courses as $course_id ) {
+				// Skip courses awaiting manual enrollment — the Tutor enrollment loop
+				// will call do_enroll() and the tutor_after_enrolled handler will
+				// consume the pending meta entry.
+				if ( isset( $this->pending_manual_meta[ "{$user_id}_{$course_id}" ] ) ) {
+					continue;
+				}
+
 				if ( ! tutor_utils()->is_enrolled( $course_id, $user_id ) ) {
 					$enrolled_id = tutor_utils()->do_enroll( $course_id, 0, $user_id );
 					if ( $enrolled_id ) {
 						tutor_utils()->course_enrol_status_change( $enrolled_id, 'completed' );
 						
-						// Phase 4: Mark as PMPro membership enrollment for display logic
 						update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
 						update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
 						
@@ -875,6 +884,28 @@ class Enrollment_Handler {
 	 * @return void
 	 */
 	public function handle_after_enrollment_completed( $course_id, $user_id, $enrolled_id ) {
+		$course_id   = (int) $course_id;
+		$user_id     = (int) $user_id;
+		$enrolled_id = (int) $enrolled_id;
+
+		// One-time manual enrollment: Step 2 stores level id in pending_manual_meta before do_enroll().
+		if ( $course_id && $user_id && $enrolled_id ) {
+			$pending_key = "{$user_id}_{$course_id}";
+			if ( isset( $this->pending_manual_meta[ $pending_key ] ) ) {
+				$level_id = (int) $this->pending_manual_meta[ $pending_key ];
+				unset( $this->pending_manual_meta[ $pending_key ] );
+
+				if ( $level_id > 0 ) {
+					update_post_meta( $enrolled_id, '_tutor_pmpro_level_id', $level_id );
+					update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_level_id', $level_id );
+					update_post_meta( $enrolled_id, '_tutorpress_pmpro_membership_enrollment', 1 );
+					update_post_meta( $enrolled_id, '_tutorpress_pmpro_manual_enrollment', 1 );
+				}
+
+				return;
+			}
+		}
+
 		$membership_enrollment_flag_required = false;
 
 		// For membership-only mode: flag all enrollments as membership-based
