@@ -354,10 +354,11 @@ class Backend_Pricing {
 							if ( 'one_time' === $selling_option ) {
 								return 'one_time' === $plan_type;
 							}
-							if ( 'subscription' === $selling_option ) {
-								return 'recurring' === $plan_type;
-							}
-							return true;
+							// "both" and "subscription" only surface recurring plans;
+							// the one-time path is handled without plan selection via
+							// Tutor's built-in "One-Time Purchase" option + the
+							// enrollment handler's auto-level-grant logic.
+							return 'recurring' === $plan_type;
 						}
 					)
 				);
