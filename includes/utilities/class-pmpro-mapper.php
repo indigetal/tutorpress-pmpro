@@ -116,7 +116,7 @@ class TutorPress_PMPro_Mapper {
         }
 
         return array(
-            'id'                => (int) ( $l['id'] ?? 0 ),
+            'id'                => (string) ( $l['id'] ?? 0 ),
             'plan_name'         => $l['name'] ?? '',
             'description'       => $l['description'] ?? '',
             // regular_price here represents the recurring/renewal price (billing_amount)

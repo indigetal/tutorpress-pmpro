@@ -35,6 +35,16 @@ class Enrollment_Handler {
 	private $access_checker;
 
 	/**
+	 * Pending PMPro level IDs for manual one-time enrollments (student_course => level_id).
+	 *
+	 * Enrollment posts do not exist until after `tutor_manual_enrollment` returns; Step 3 records meta on `tutor_after_enrolled`.
+	 *
+	 * @since 1.0.0
+	 * @var array<string, int>
+	 */
+	private $pending_manual_meta = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @since 1.0.0
@@ -62,9 +72,20 @@ class Enrollment_Handler {
 		
 		// Unenroll on refunded orders
 		add_action( 'pmpro_order_status_refunded', array( $this, 'pmpro_order_status_refunded' ), 10, 2 );
+
+		// Manual enrollment (admin): PMPro subscription + one-time course paths
+		add_filter( 'tutor_manual_enrollment', array( $this, 'handle_manual_pmpro_enrollment' ), 10, 4 );
+
+		// Provide plan info for PMPro levels so student search AJAX doesn't bail
+		add_filter( 'tutor_get_plan_info', array( $this, 'provide_pmpro_plan_info' ), 10, 2 );
 		
 		// Track manual enrollments (Phase 11, Substep 2)
 		add_action( 'tutor_after_enrolled', array( $this, 'handle_after_enrollment_completed' ), 10, 3 );
+
+		// Redirect tutor-subscriptions to enrollments when PMPro is the monetization engine.
+		// Tutor's enrollment React app redirects to tutor-subscriptions after subscription
+		// enrollment, but that page only exists when Tutor's native subscription addon is active.
+		add_action( 'admin_menu', array( $this, 'maybe_register_subscriptions_redirect' ), 999 );
 	}
 
 	/**
@@ -127,6 +148,282 @@ class Enrollment_Handler {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Manual bulk enrollment under PMPro: subscription (plan = level id) or one-time (course ids + level grant).
+	 *
+	 * @param array  $enrollment_data  Keys: failed_enrollment_list, total_enrolled_students.
+	 * @param array  $object_ids       Subscription: PMPro level id at [0]. One-time: course/bundle post ids.
+	 * @param array  $student_ids      User ids to enroll.
+	 * @param string $payment_status   Tutor payment status constant.
+	 * @return array
+	 */
+	public function handle_manual_pmpro_enrollment( $enrollment_data, $object_ids, $student_ids, $payment_status ) {
+		if ( ! function_exists( 'tutor_utils' ) || ! tutor_utils()->has_pmpro( true ) ) {
+			return $enrollment_data;
+		}
+
+		$order_type = '';
+		if ( class_exists( '\Tutor\Helpers\Input' ) ) {
+			$order_type = (string) \Tutor\Helpers\Input::post( 'order_type' );
+		} elseif ( isset( $_POST['order_type'] ) ) {
+			$order_type = sanitize_text_field( wp_unslash( $_POST['order_type'] ) );
+		}
+
+		$failed = isset( $enrollment_data['failed_enrollment_list'] ) && is_array( $enrollment_data['failed_enrollment_list'] )
+			? $enrollment_data['failed_enrollment_list']
+			: array();
+		$total  = isset( $enrollment_data['total_enrolled_students'] ) ? (int) $enrollment_data['total_enrolled_students'] : 0;
+
+		// (a) Subscription: object_ids[0] is PMPro level id; resolve course via level meta.
+		// Always short-circuit when order_type is subscription so core never treats level id as post id.
+		if ( 'subscription' === $order_type ) {
+			$level_id = isset( $object_ids[0] ) ? (int) $object_ids[0] : 0;
+
+			if ( ! $level_id || ! function_exists( 'pmpro_changeMembershipLevel' ) ) {
+				foreach ( $student_ids as $student_id ) {
+					$failed[] = $this->get_manual_failed_user_data( (int) $student_id );
+				}
+				return array(
+					'message'                    => __( 'Enrollment done for selected students', 'tutorpress-pmpro' ),
+					'is_subscription_enrollment' => true,
+					'failed_enrollment_list'     => $failed,
+					'total_enrolled_students'    => $total,
+				);
+			}
+
+			$course_id         = (int) get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true );
+			$course_post_type  = ( function_exists( 'tutor' ) && isset( tutor()->course_post_type ) ) ? tutor()->course_post_type : 'courses';
+			$actual_post_type  = get_post_type( $course_id );
+
+			if ( ! $course_id || $course_post_type !== $actual_post_type ) {
+				foreach ( $student_ids as $student_id ) {
+					$failed[] = $this->get_manual_failed_user_data( (int) $student_id );
+				}
+				return array(
+					'message'                    => __( 'Enrollment done for selected students', 'tutorpress-pmpro' ),
+					'is_subscription_enrollment' => true,
+					'failed_enrollment_list'     => $failed,
+					'total_enrolled_students'    => $total,
+				);
+			}
+
+			foreach ( $student_ids as $student_id ) {
+				$student_id = (int) $student_id;
+				if ( ! $student_id ) {
+					continue;
+				}
+
+				$already_enrolled = tutor_utils()->is_enrolled( $course_id, $student_id, false );
+
+				if ( $already_enrolled ) {
+					$failed[] = $this->get_manual_failed_user_data( $student_id );
+					continue;
+				}
+
+				$enroll_id = tutor_utils()->do_enroll( $course_id, 0, $student_id );
+
+				if ( $enroll_id ) {
+					tutor_utils()->course_enrol_status_change( $enroll_id, 'completed' );
+					update_post_meta( $enroll_id, '_tutor_pmpro_level_id', $level_id );
+					update_post_meta( $enroll_id, '_tutorpress_pmpro_membership_level_id', $level_id );
+					update_post_meta( $enroll_id, '_tutorpress_pmpro_membership_enrollment', 1 );
+					update_post_meta( $enroll_id, '_tutorpress_pmpro_manual_enrollment', 1 );
+					pmpro_changeMembershipLevel( $level_id, $student_id );
+					++$total;
+				} else {
+					$failed[] = $this->get_manual_failed_user_data( $student_id );
+				}
+			}
+
+			return array(
+				'message'                    => __( 'Enrollment done for selected students', 'tutorpress-pmpro' ),
+				'is_subscription_enrollment' => true,
+				'failed_enrollment_list'     => $failed,
+				'total_enrolled_students'    => $total,
+			);
+		}
+
+		// (b) One-time: grant first one-time PMPro level per course; Tutor core runs do_enroll() afterward.
+		add_filter(
+			'tutor_enroll_data',
+			function ( $data ) {
+				$data['post_status'] = 'completed';
+				return $data;
+			},
+			10
+		);
+
+		if ( ! is_array( $object_ids ) || empty( $object_ids ) || ! is_array( $student_ids ) ) {
+			return $enrollment_data;
+		}
+
+		foreach ( $object_ids as $object_id ) {
+			$course_id = (int) $object_id;
+			if ( ! $course_id ) {
+				continue;
+			}
+
+			$one_time_level_id = $this->get_first_one_time_pmpro_level_for_course( $course_id );
+			if ( ! $one_time_level_id ) {
+				continue;
+			}
+
+			foreach ( $student_ids as $student_id ) {
+				$student_id = (int) $student_id;
+				if ( ! $student_id || ! function_exists( 'pmpro_changeMembershipLevel' ) ) {
+					continue;
+				}
+				pmpro_changeMembershipLevel( $one_time_level_id, $student_id );
+				$this->pending_manual_meta[ "{$student_id}_{$course_id}" ] = $one_time_level_id;
+			}
+		}
+
+		return $enrollment_data;
+	}
+
+	/**
+	 * First PMPro level on the course that is one-time (billing_amount <= 0 and cycle_number === 0).
+	 *
+	 * @param int $course_id Course post ID.
+	 * @return int Level id or 0.
+	 */
+	private function get_first_one_time_pmpro_level_for_course( $course_id ) {
+		$course_id = (int) $course_id;
+		if ( ! $course_id || ! function_exists( 'pmpro_getLevel' ) ) {
+			return 0;
+		}
+
+		$mapped = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+		if ( empty( $mapped ) || ! is_array( $mapped ) ) {
+			return 0;
+		}
+
+		foreach ( $mapped as $v ) {
+			$lid = (int) $v;
+			if ( ! $lid ) {
+				continue;
+			}
+			$level = pmpro_getLevel( $lid );
+			if ( ! $level ) {
+				continue;
+			}
+			$billing = isset( $level->billing_amount ) ? (float) $level->billing_amount : 0.0;
+			$cycle   = isset( $level->cycle_number ) ? (int) $level->cycle_number : 0;
+			if ( $billing <= 0 && 0 === $cycle ) {
+				return $lid;
+			}
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Shape failed student row like Tutor Enrollments::get_failed_user_data().
+	 *
+	 * @param int $student_id User ID.
+	 * @return array{first_name: string, last_name: string, email: string}
+	 */
+	private function get_manual_failed_user_data( $student_id ) {
+		$user = get_userdata( $student_id );
+		if ( ! $user ) {
+			return array(
+				'first_name' => '',
+				'last_name'  => '',
+				'email'      => '',
+			);
+		}
+
+		return array(
+			'first_name' => $user->user_login,
+			'last_name'  => '',
+			'email'      => $user->user_email,
+		);
+	}
+
+	/**
+	 * Return a plan-info object for a PMPro level so the student-search AJAX
+	 * endpoint (`ajax_get_unenrolled_users`) doesn't bail with "Invalid plan selected".
+	 *
+	 * Tutor's `Enrollments.php:592` calls `apply_filters('tutor_get_plan_info', null, $object_id)`
+	 * when `order_type === 'subscription'`. Under native Tutor the subscription addon handles
+	 * this; under PMPro nobody does, so `$plan` stays null → bad-request. We provide a
+	 * lightweight plan-shaped object with `is_membership_plan = false` so the endpoint
+	 * falls through to using the `course_id` POST field for enrollment-status checks.
+	 *
+	 * @param object|null $plan    Current plan (null if nobody handled the filter yet).
+	 * @param int         $plan_id Plan / PMPro level ID.
+	 * @return object|null
+	 */
+	public function provide_pmpro_plan_info( $plan, $plan_id ) {
+		if ( null !== $plan ) {
+			return $plan;
+		}
+
+		if ( ! function_exists( 'tutor_utils' ) || ! tutor_utils()->has_pmpro( true ) ) {
+			return $plan;
+		}
+
+		if ( ! function_exists( 'pmpro_getLevel' ) ) {
+			return $plan;
+		}
+
+		$level = pmpro_getLevel( (int) $plan_id );
+		if ( ! $level ) {
+			return $plan;
+		}
+
+		return (object) array(
+			'id'                 => (int) $level->id,
+			'plan_name'          => isset( $level->name ) ? $level->name : '',
+			'regular_price'      => isset( $level->initial_payment ) ? (float) $level->initial_payment : 0.0,
+			'is_membership_plan' => false,
+		);
+	}
+
+	/**
+	 * Register a hidden admin page for tutor-subscriptions that redirects to enrollments.
+	 *
+	 * Tutor's enrollment React app hardcodes a redirect to tutor-subscriptions after
+	 * subscription-type enrollment. That admin page only exists when Tutor's own
+	 * subscription addon is active. Under PMPro monetization it does not exist,
+	 * so the user would see "Sorry, you are not allowed to access this page."
+	 *
+	 * We register the page at priority 999 (after all other menus) so we only add
+	 * it when no other plugin has already registered it.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function maybe_register_subscriptions_redirect() {
+		global $submenu, $menu, $_registered_pages;
+
+		$page_hook = get_plugin_page_hookname( 'tutor-subscriptions', '' );
+		if ( ! empty( $_registered_pages[ $page_hook ] ) ) {
+			return;
+		}
+
+		// Register a hidden page (no menu entry) that redirects to enrollments.
+		add_submenu_page(
+			null,
+			'',
+			'',
+			'manage_options',
+			'tutor-subscriptions',
+			array( $this, 'handle_subscriptions_redirect' )
+		);
+	}
+
+	/**
+	 * Callback for the hidden tutor-subscriptions page — immediately redirect.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function handle_subscriptions_redirect() {
+		wp_safe_redirect( admin_url( 'admin.php?page=enrollments' ) );
+		exit;
 	}
 
 	/**
