@@ -85,6 +85,8 @@ class Pricing_Display {
 		// Course loop/archive pricing
 		add_filter( 'get_tutor_course_price', array( $this, 'filter_get_tutor_course_price' ), 12, 2 );
 		add_filter( 'tutor_course_loop_price', array( $this, 'filter_course_loop_price_pmpro' ), 12, 2 );
+		// After Tutor Pro bundle filter (priority 100): bundles with PMPro levels are purchasable despite zero native Tutor prices.
+		add_filter( 'is_course_purchasable', array( $this, 'filter_bundle_purchasable' ), 101, 2 );
 		add_filter( 'tutor_course_sell_by', array( $this, 'filter_course_sell_by' ), 9, 1 );
 		
 		// Bundle course price override for bundle price calculation (TutorPress Gutenberg panel)
@@ -118,15 +120,62 @@ class Pricing_Display {
 	}
 
 	/**
-	 * Enqueue frontend pricing styles for single course pages.
+	 * Enqueue frontend pricing styles for single course and bundle pages.
+	 *
+	 * Bundle singles use the same PMPro pricing template; without this CSS, native radios
+	 * stay visible alongside Tutor's decorative `.tutor-form-check-input-radio` span.
 	 *
 	 * @since 1.0.0
 	 * @return void
 	 */
 	public function pricing_style() {
-		if ( function_exists( 'is_single_course' ) && is_single_course() ) {
+		$load = ( function_exists( 'is_single_course' ) && is_single_course() ) || is_singular( 'course-bundle' );
+		if ( $load ) {
 			wp_enqueue_style( 'tutorpress-pmpro-pricing', TUTORPRESS_PMPRO()->url . 'assets/css/pricing.css', array(), TUTORPRESS_PMPRO_VERSION );
 		}
+	}
+
+	/**
+	 * Mark PMPro-linked bundles as purchasable after Tutor Pro's native-price check.
+	 *
+	 * Tutor Pro sets is_course_purchasable false when get_raw_course_price is zero; in PMPro
+	 * mode that is expected while levels still define checkout pricing.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param bool $is_purchasable Whether the course or bundle is purchasable.
+	 * @param int  $course_id      Post ID (course or bundle).
+	 * @return bool
+	 */
+	public function filter_bundle_purchasable( $is_purchasable, $course_id ) {
+		$course_id = (int) $course_id;
+		if ( $course_id <= 0 ) {
+			return $is_purchasable;
+		}
+
+		if ( 'course-bundle' !== get_post_type( $course_id ) ) {
+			return $is_purchasable;
+		}
+
+		if ( ! $this->pmpro->is_pmpro_enabled() ) {
+			return $is_purchasable;
+		}
+
+		if ( 'free' === get_post_meta( $course_id, '_tutor_course_price_type', true ) ) {
+			return $is_purchasable;
+		}
+
+		$pmpro_levels = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+		if ( is_array( $pmpro_levels ) && ! empty( $pmpro_levels ) ) {
+			return true;
+		}
+
+		$level_ids = $this->get_level_ids_for_object( $course_id, true );
+		if ( ! empty( $level_ids ) ) {
+			return true;
+		}
+
+		return $is_purchasable;
 	}
 
 	/**

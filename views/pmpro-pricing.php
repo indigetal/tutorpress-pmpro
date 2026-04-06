@@ -40,58 +40,61 @@
 		<input type="radio" name="TUTORPRESS_PMPRO_level_radio" id="<?php echo esc_attr( $level_id ); ?>" <?php echo ( $highlight || 1 === $level_count ) ? 'checked="checked"' : ''; ?>/>
 		<label for="<?php echo esc_attr( $level_id ); ?>" class="<?php echo $highlight ? 'tutorpress-pmpro-level-highlight' : ''; ?>">
 			<div class="tutorpress-pmpro-level-header tutor-d-flex tutor-align-center tutor-justify-between">
-				<div class="tutor-d-flex tutor-align-center">
-					<span class="tutor-form-check-input tutor-form-check-input-radio" area-hidden="true"></span>
-					<span class="tutor-fs-5 tutor-fw-medium tutor-ml-12"><?php echo esc_html( $level->name ); ?></span>
+				<div class="tutor-d-flex tutor-align-center tutorpress-pmpro-level-title-wrap">
+					<span class="tutor-form-check-input tutor-form-check-input-radio tutorpress-pmpro-level-radio-visual" area-hidden="true"></span>
+					<span class="tutor-fs-5 tutor-fw-medium tutor-ml-12 tutorpress-pmpro-level-name"><?php echo esc_html( $level->name ); ?></span>
 				</div>
 
-				<div class="tutor-fs-4">
+				<div class="tutor-fs-4 tutorpress-pmpro-level-price-wrap">
 					<?php
 						// Step 3.4b: Dynamic pricing display with sale support
 						// PMPro Model: initial_payment (first payment) + billing_amount (recurring)
 						// Sale applies to initial_payment only (enrollment window discount)
-						$billing_amount  = round( $level->billing_amount );
-						
+						$billing_amount_num = (float) $level->billing_amount;
+
 						// Use active_price if available (calculated in pmpro_pricing method)
 						// Otherwise fall back to initial_payment for backward compatibility
-						$display_initial = isset( $level->active_price ) ? round( $level->active_price ) : round( $level->initial_payment );
-						
+						$display_initial_num = isset( $level->active_price ) ? (float) $level->active_price : (float) $level->initial_payment;
+
 						// Check if sale is active
 						$is_on_sale = ! empty( $level->is_on_sale );
-						$regular_initial = ! empty( $level->regular_price_display ) ? round( $level->regular_price_display ) : $display_initial;
+						$regular_initial_num = ! empty( $level->regular_price_display ) ? (float) $level->regular_price_display : $display_initial_num;
+
+						$format_price = static function ( $amount ) {
+							return number_format_i18n( (float) $amount, 2 );
+						};
 
 						// Build price display HTML
 						$billing_text = '';
-						
+
 						if ( $level->cycle_period ) {
 							// RECURRING SUBSCRIPTION
 							// PMPro always has initial_payment (first payment) + billing_amount (recurring)
 							// Sale applies to initial payment (enrollment window discount)
-							
-							if ( $is_on_sale && $regular_initial > $display_initial ) {
+							if ( $is_on_sale && $regular_initial_num > $display_initial_num ) {
 								// WITH SALE: Show "~~$100~~ $75 (then $50/Mo)"
 								// Always show recurring amount to clarify sale applies to initial only
 								// Show regular initial payment with strikethrough
 								$billing_text .= '<span class="tutor-fw-normal" style="text-decoration: line-through; opacity: 0.6; margin-right: 8px;">';
 									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-										$billing_text .= $regular_initial;
+										$billing_text .= $format_price( $regular_initial_num );
 									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 								$billing_text .= '</span>';
-								
+
 								// Show discounted initial payment
 								$billing_text .= '<span class="tutor-fw-bold">';
 									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-										$billing_text .= $display_initial;
+										$billing_text .= $format_price( $display_initial_num );
 									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 								$billing_text .= '</span>';
-								
+
 								// Always show recurring amount in parentheses for subscriptions with sale
 								// This clarifies that sale applies to initial payment, not recurring
 								$billing_text .= ' <span class="tutor-fs-6 tutor-color-muted">(';
 								$billing_text .= esc_html__( 'then', 'tutorpress-pmpro' ) . ' ';
 								$billing_text .= '<span class="tutor-fw-medium">';
 									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-										$billing_text .= $billing_amount;
+										$billing_text .= $format_price( $billing_amount_num );
 									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 								$billing_text .= '/' . substr( $level->cycle_period, 0, 2 );
 								$billing_text .= '</span>';
@@ -99,20 +102,20 @@
 							} else {
 								// NO SALE: Show initial payment if different from recurring
 								// If initial = recurring, just show recurring. Otherwise show "initial (then recurring)"
-								if ( $display_initial != $billing_amount ) {
+								if ( $display_initial_num !== $billing_amount_num ) {
 									// Show "$100 (then $50/Mo)"
 									$billing_text .= '<span class="tutor-fw-bold">';
 										'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-											$billing_text .= $display_initial;
+											$billing_text .= $format_price( $display_initial_num );
 							'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 									$billing_text .= '</span>';
-									
+
 									// Show recurring amount in parentheses
 									$billing_text .= ' <span class="tutor-fs-6 tutor-color-muted">(';
 									$billing_text .= esc_html__( 'then', 'tutorpress-pmpro' ) . ' ';
 									$billing_text .= '<span class="tutor-fw-medium">';
 										'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-											$billing_text .= $billing_amount;
+											$billing_text .= $format_price( $billing_amount_num );
 										'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 									$billing_text .= '/' . substr( $level->cycle_period, 0, 2 );
 									$billing_text .= '</span>';
@@ -121,7 +124,7 @@
 									// Initial = recurring, just show recurring like "$50/Mo"
 									$billing_text .= '<span class="tutor-fw-bold">';
 										'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-											$billing_text .= $billing_amount;
+											$billing_text .= $format_price( $billing_amount_num );
 										'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 									$billing_text .= '</span>';
 									$billing_text .= '<span class="tutor-fs-7 tutor-color-muted">/' . substr( $level->cycle_period, 0, 2 ) . '</span>';
@@ -130,18 +133,18 @@
 						} else {
 							// ONE-TIME PURCHASE
 							// Show sale price with strikethrough regular price
-							if ( $is_on_sale && $regular_initial > $display_initial ) {
+							if ( $is_on_sale && $regular_initial_num > $display_initial_num ) {
 								$billing_text .= '<span class="tutor-fw-normal" style="text-decoration: line-through; opacity: 0.6; margin-right: 8px;">';
 									'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-										$billing_text .= $regular_initial;
+										$billing_text .= $format_price( $regular_initial_num );
 									'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 								$billing_text .= '</span>';
 							}
-							
+
 							// Show active price
 							$billing_text .= '<span class="tutor-fw-bold">';
 								'left' === $currency_position ? $billing_text .= $currency_symbol : 0;
-									$billing_text .= $display_initial;
+									$billing_text .= $format_price( $display_initial_num );
 								'right' === $currency_position ? $billing_text .= $currency_symbol : 0;
 							$billing_text .= '</span>';
 						}

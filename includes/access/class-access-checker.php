@@ -129,6 +129,14 @@ class Access_Checker implements Access_Checker_Interface {
 			) > 0;
 		}
 
+		// Bundles (and some courses) link levels via post meta only, not pmpro_memberships_pages.
+		if ( ! $has_course_levels ) {
+			$tutorpress_levels = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+			if ( is_array( $tutorpress_levels ) && ! empty( $tutorpress_levels ) ) {
+				$has_course_levels = true;
+			}
+		}
+
 		// Only grant automatic access if:
 		// 1. No category restrictions exist
 		// 2. No full-site levels exist

@@ -2,6 +2,8 @@
   -webkit-box-sizing: border-box;
   box-sizing: border-box;
   border-radius: 6px;
+  container-type: inline-size;
+  container-name: tutorpress-pmpro-pricing;
 }
 .tutorpress-pmpro-single-course-pricing > h3 {
   color: var(--tutor-color-primary);
@@ -61,4 +63,67 @@
   position: absolute;
   top: 0;
   right: 0;
+}
+
+/* Plan header: prevent flex overflow in narrow entry boxes (long names + sale/recurring text). */
+.tutorpress-pmpro-single-course-pricing .tutorpress-pmpro-level-header.tutor-d-flex {
+  -ms-flex-wrap: wrap;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  -webkit-box-align: start;
+  -ms-flex-align: start;
+  align-items: flex-start;
+}
+
+.tutorpress-pmpro-single-course-pricing .tutorpress-pmpro-level-title-wrap {
+  -webkit-box-flex: 1;
+  -ms-flex: 1 1 12rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+  -ms-flex-wrap: wrap;
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+}
+
+.tutorpress-pmpro-single-course-pricing .tutorpress-pmpro-level-radio-visual {
+  -ms-flex-negative: 0;
+  flex-shrink: 0;
+}
+
+.tutorpress-pmpro-single-course-pricing .tutorpress-pmpro-level-name {
+  min-width: 0;
+  -webkit-box-flex: 1;
+  -ms-flex: 1 1 8rem;
+  flex: 1 1 8rem;
+  overflow-wrap: anywhere;
+  word-wrap: break-word;
+  line-height: 1.35;
+}
+
+.tutorpress-pmpro-single-course-pricing .tutorpress-pmpro-level-price-wrap {
+  -webkit-box-flex: 1;
+  -ms-flex: 1 1 10rem;
+  flex: 1 1 10rem;
+  min-width: 0;
+  text-align: right;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-wrap: break-word;
+}
+
+/* Full-width price row when the form itself is narrow (sidebar entry box). */
+@container tutorpress-pmpro-pricing (max-width: 24rem) {
+  .tutorpress-pmpro-single-course-pricing .tutorpress-pmpro-level-price-wrap {
+    -ms-flex-preferred-size: 100%;
+    flex-basis: 100%;
+    text-align: left;
+  }
+}
+
+@media (max-width: 782px) {
+  .tutorpress-pmpro-single-course-pricing .tutorpress-pmpro-level-price-wrap {
+    -ms-flex-preferred-size: 100%;
+    flex-basis: 100%;
+    text-align: left;
+  }
 }
