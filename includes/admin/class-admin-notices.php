@@ -46,6 +46,9 @@ class Admin_Notices {
 			// Display notices on level edit page
 			add_action( 'pmpro_membership_level_after_general_information', array( $this, 'display_course_association_notice' ), 10 );
 			add_action( 'pmpro_membership_level_after_billing_details_settings', array( $this, 'display_sale_price_notice_on_level_edit' ), 10 );
+
+			// Display warning on bundle edit screen when bundle has no price / no PMPro levels
+			add_action( 'admin_notices', array( $this, 'display_bundle_zero_price_notice' ), 10 );
 		}
 	}
 
@@ -302,6 +305,48 @@ class Admin_Notices {
 					esc_html_e( 'The Initial Payment field above shows the regular price. Customers will automatically be charged the sale price at checkout.', 'tutorpress-pmpro' );
 				}
 				?>
+			</p>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Display warning notice on bundle edit screen when a published bundle
+	 * has no price set and no PMPro membership levels.
+	 *
+	 * This catches edge cases where tutor_course_price was not populated
+	 * (e.g. bundles created before upstream auto-populate fix, direct DB
+	 * edits, or race conditions) so the instructor can take action.
+	 *
+	 * @since 1.8.0
+	 * @return void
+	 */
+	public function display_bundle_zero_price_notice() {
+		$screen = get_current_screen();
+		if ( ! $screen || 'course-bundle' !== $screen->post_type || 'post' !== $screen->base ) {
+			return;
+		}
+
+		global $post;
+		if ( ! $post || 'publish' !== $post->post_status ) {
+			return;
+		}
+
+		$price = get_post_meta( $post->ID, 'tutor_course_price', true );
+		if ( ! empty( $price ) && floatval( $price ) > 0 ) {
+			return;
+		}
+
+		$levels = get_post_meta( $post->ID, '_tutorpress_pmpro_levels', true );
+		if ( ! empty( $levels ) && is_array( $levels ) ) {
+			return;
+		}
+
+		?>
+		<div class="notice notice-warning is-dismissible">
+			<p>
+				<strong><?php esc_html_e( 'TutorPress PMPro:', 'tutorpress-pmpro' ); ?></strong>
+				<?php esc_html_e( 'This bundle has no price set and no PMPro membership level was created. Students cannot purchase this bundle until you enter a bundle price and update the post.', 'tutorpress-pmpro' ); ?>
 			</p>
 		</div>
 		<?php

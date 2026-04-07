@@ -1510,6 +1510,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$regular_price = get_post_meta( $object_id, 'tutor_course_price', true );
 		$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
 
+		// Defensive fallback for bundles: if tutor_course_price is 0/unset (e.g. race
+		// condition, direct DB edit, pre-fix bundle), derive price from included courses.
+		if ( 'course-bundle' === $post_type && $regular_price <= 0 ) {
+			$regular_price = $this->calculate_bundle_regular_price( $object_id );
+			if ( $regular_price > 0 ) {
+				$this->log( '[TP-PMPRO] handle_one_time_branch bundle_price_fallback; bundle=' . $object_id . ' calculated_price=' . $regular_price );
+			}
+		}
+
 		if ( ! empty( $one_time ) ) {
 			// One-time level(s) exist: update the first one
 			// NOTE: initial_payment is handled by handle_sale_price_for_one_time() to support sales
