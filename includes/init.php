@@ -1835,12 +1835,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * Note: Full-site membership validation for 'all' happens in frontend (TutorPress core).
 	 * This method only manages course-specific one-time and subscription levels.
 	 *
-	 * @param int   $course_id
-	 * @param array $state
+	 * @param int    $course_id
+	 * @param array  $state
+	 * @param string $post_type Post type ('courses' or 'course-bundle')
 	 * @return void
 	 */
-	private function handle_both_and_all_branch( $course_id, $state = array() ) {
+	private function handle_both_and_all_branch( $course_id, $state = array(), $post_type = 'courses' ) {
 		$course_id = (int) $course_id;
+		$object_label = ( $post_type === 'course-bundle' ) ? 'bundle' : 'course';
+		$meta_key = ( $post_type === 'course-bundle' ) ? 'tutorpress_bundle_id' : 'tutorpress_course_id';
 		$one_time = isset( $state['one_time_ids'] ) ? (array) $state['one_time_ids'] : array();
 		$recurring = isset( $state['recurring_ids'] ) ? (array) $state['recurring_ids'] : array();
 		
@@ -1868,7 +1871,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				if ( $level_id > 0 ) {
 					// Set reverse ownership meta
 					if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-						update_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', $course_id );
+						update_pmpro_membership_level_meta( $level_id, $meta_key, $course_id );
 						update_pmpro_membership_level_meta( $level_id, 'tutorpress_managed', 1 );
 					}
 					// Ensure association
@@ -1878,16 +1881,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 					\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 					
 					// Phase 5: Add level to course group
-					self::add_level_to_course_group( $course_id, $level_id );
+					self::add_level_to_course_group( $course_id, $level_id, $post_type );
 					
 					// Handle sale price for the newly created one-time level
 					$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
 					
 					$one_time[] = $level_id;
-					$this->log( '[TP-PMPRO] handle_both_and_all_branch created_one_time_level_id=' . $level_id . ' course=' . $course_id . ' price=' . $regular_price );
+					$this->log( '[TP-PMPRO] handle_both_and_all_branch created_one_time_level_id=' . $level_id . ' ' . $object_label . '=' . $course_id . ' price=' . $regular_price );
 				}
 			} else {
-				$this->log( '[TP-PMPRO] handle_both_and_all_branch skipped_one_time_creation (no price set); course=' . $course_id );
+				$this->log( '[TP-PMPRO] handle_both_and_all_branch skipped_one_time_creation (no price set); ' . $object_label . '=' . $course_id );
 			}
 		} else {
 			// One-time level already exists - update it with current price and sale
@@ -1910,13 +1913,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 				);
 				
 				// Phase 5: Ensure level is in course group
-				self::add_level_to_course_group( $course_id, $existing_level_id );
+				self::add_level_to_course_group( $course_id, $existing_level_id, $post_type );
 				
 				// Handle sale price (which will also update initial_payment)
 				$this->handle_sale_price_for_one_time( $course_id, $existing_level_id, $regular_price );
 			}
 			
-			$this->log( '[TP-PMPRO] handle_both_and_all_branch one_time_level_exists; course=' . $course_id . ' level_id=' . $existing_level_id );
+			$this->log( '[TP-PMPRO] handle_both_and_all_branch one_time_level_exists; ' . $object_label . '=' . $course_id . ' level_id=' . $existing_level_id );
 		}
 		
 		// Update meta with all valid IDs (one-time + recurring)
@@ -1924,7 +1927,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( ! empty( $all_ids ) ) {
 			update_post_meta( $course_id, '_tutorpress_pmpro_levels', $all_ids );
 		}
-		$this->log( '[TP-PMPRO] handle_both_and_all_branch updated_meta; course=' . $course_id . ' one_time_count=' . count( $one_time ) . ' recurring_count=' . count( $recurring ) . ' total=' . count( $all_ids ) );
+		$this->log( '[TP-PMPRO] handle_both_and_all_branch updated_meta; ' . $object_label . '=' . $course_id . ' one_time_count=' . count( $one_time ) . ' recurring_count=' . count( $recurring ) . ' total=' . count( $all_ids ) );
 	}
 
 	/**
