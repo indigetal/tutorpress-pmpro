@@ -1449,18 +1449,23 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( empty( $one_time ) ) {
 			// Nothing to delete; ensure meta only contains recurring ids
 			update_post_meta( $object_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
-			return;
+		} else {
+			if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
+				require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
+			}
+			foreach ( $one_time as $lid ) {
+				\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
+				$this->log( '[TP-PMPRO] handle_subscription_branch deleted_one_time_level_id=' . (int) $lid . ' ' . $object_label . '=' . $object_id );
+			}
+			// Persist remaining recurring IDs
+			update_post_meta( $object_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
+			$this->log( '[TP-PMPRO] handle_subscription_branch updated_levels; ' . $object_label . '=' . $object_id . ' recurring_count=' . count( $recurring ) );
 		}
-		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) {
-			require_once $this->path . 'includes/utilities/class-pmpro-level-cleanup.php';
+
+		// Sync PMPro group name / membership with saved title (subscription-only reconcile previously skipped this path).
+		foreach ( $recurring as $level_id ) {
+			self::add_level_to_course_group( $object_id, (int) $level_id, $post_type );
 		}
-		foreach ( $one_time as $lid ) {
-			\TUTORPRESS_PMPRO\PMPro_Level_Cleanup::full_delete_level( (int) $lid, true );
-			$this->log( '[TP-PMPRO] handle_subscription_branch deleted_one_time_level_id=' . (int) $lid . ' ' . $object_label . '=' . $object_id );
-		}
-		// Persist remaining recurring IDs
-		update_post_meta( $object_id, '_tutorpress_pmpro_levels', array_values( array_map( 'intval', $recurring ) ) );
-		$this->log( '[TP-PMPRO] handle_subscription_branch updated_levels; ' . $object_label . '=' . $object_id . ' recurring_count=' . count( $recurring ) );
 	}
 
 	/**
@@ -2233,11 +2238,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 *
 	 * @since 1.6.0
 	 * @since 1.7.0 Added bundle support
-	 * @param int    $object_id The course or bundle ID
-	 * @param string $post_type Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
+	 * @param int         $object_id The course or bundle ID
+	 * @param string|null $post_type Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
+	 * @param string|null $title_override Optional. When the post is `auto-draft`, used as the title segment for the group name instead of DB title or placeholder.
 	 * @return int|false The group ID, or false on failure
 	 */
-	public static function get_or_create_course_level_group( $object_id, $post_type = null ) {
+	public static function get_or_create_course_level_group( $object_id, $post_type = null, $title_override = null ) {
 		if ( ! function_exists( 'pmpro_create_level_group' ) ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] get_or_create_course_level_group skipped (PMPro groups not available); object=' . $object_id );
@@ -2274,8 +2280,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return false;
 		}
 
-		// Get current title (always fresh)
-		$title = get_the_title( $object_id );
+		// Title for group name: for auto-draft, prefer REST/editor override, else (Untitled); otherwise DB title.
+		$post_status = get_post_status( $object_id );
+		if ( 'auto-draft' === $post_status ) {
+			if ( is_string( $title_override ) && '' !== trim( $title_override ) ) {
+				$title = $title_override;
+			} else {
+				$title = __( '(Untitled)', 'tutorpress-pmpro' );
+			}
+		} else {
+			$title = get_the_title( $object_id );
+		}
 		// Use appropriate prefix based on post type
 		if ( 'course-bundle' === $post_type ) {
 			$group_name = sprintf( __( 'Bundle: %s', 'tutorpress-pmpro' ), $title );
@@ -2336,12 +2351,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 *
 	 * @since 1.6.0
 	 * @since 1.7.0 Added bundle support
-	 * @param int    $object_id The course or bundle ID
-	 * @param int    $level_id The level ID
-	 * @param string $post_type Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
+	 * @param int         $object_id The course or bundle ID
+	 * @param int         $level_id The level ID
+	 * @param string|null $post_type Optional. Post type ('courses' or 'course-bundle'). Auto-detected if not provided.
+	 * @param string|null $title_override Optional. Passed to get_or_create_course_level_group when the post may be `auto-draft`.
 	 * @return bool True if added successfully, false otherwise
 	 */
-	public static function add_level_to_course_group( $object_id, $level_id, $post_type = null ) {
+	public static function add_level_to_course_group( $object_id, $level_id, $post_type = null, $title_override = null ) {
 		if ( ! function_exists( 'pmpro_add_level_to_group' ) ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				$object_label = ( null !== $post_type && 'course-bundle' === $post_type ) ? 'bundle' : 'course';
@@ -2355,7 +2371,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$post_type = get_post_type( $object_id );
 		}
 
-		$group_id = self::get_or_create_course_level_group( $object_id, $post_type );
+		$group_id = self::get_or_create_course_level_group( $object_id, $post_type, $title_override );
 		if ( ! $group_id ) {
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';

@@ -103,6 +103,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 							'object_id' => [ 'required' => false, 'type' => 'integer', 'sanitize_callback' => 'absint' ],
 							'plan_name' => [ 'required' => true, 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ],
 							'regular_price' => [ 'required' => true, 'type' => 'number', 'minimum' => 0 ],
+							'object_title' => [ 'required' => false, 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ],
 						],
 					],
 				]
@@ -532,7 +533,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 			// Phase 5: Add level to course/bundle group
 			if ( class_exists( '\\TUTORPRESS_PMPRO\\Init' ) ) {
-				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $level_id, $object_info['post_type'] );
+				$group_title_override = null;
+				if ( $request->has_param( 'object_title' ) ) {
+					$group_title_override = sanitize_text_field( wp_unslash( (string) $request->get_param( 'object_title' ) ) );
+				}
+				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $level_id, $object_info['post_type'], $group_title_override );
 			}
 			
 			// Note: Sale price handling for one-time purchases happens in reconciliation logic
