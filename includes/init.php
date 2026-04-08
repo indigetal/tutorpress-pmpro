@@ -869,15 +869,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( null === $price ) {
 			$price = get_post_meta( $bundle_id, 'tutor_course_price', true );
 		}
-		// Use a transient to prevent duplicate reconciliation across multiple requests
-		// This is needed because save_post hooks can fire in separate requests after REST completes
-		$reconcile_key = 'tp_pmpro_reconcile_' . $bundle_id;
-		if ( get_transient( $reconcile_key ) ) {
-			return;
-		}
-		set_transient( $reconcile_key, 1, 10 ); // 10-second window to prevent duplicates
-		
-		// Also mark in instance variable for same-request deduplication
 		$this->reconcile_scheduled[ $bundle_id ] = true;
 		
 		// Call reconciliation DIRECTLY instead of scheduling on shutdown
@@ -903,20 +894,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( 'course-bundle' !== get_post_type( $post_id ) ) {
 			return;
 		}
-		// Skip if REST hook already reconciled recently (check transient)
-		$reconcile_key = 'tp_pmpro_reconcile_' . $post_id;
-		if ( get_transient( $reconcile_key ) ) {
-			return;
-		}
-		// Skip if this is a REST request (REST hook will handle it with proper context)
-		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
-			return;
-		}
-		// Skip if already scheduled in this request
 		if ( isset( $this->reconcile_scheduled[ $post_id ] ) ) {
 			return;
 		}
-		// Schedule reconciliation on shutdown (prevent duplicates with tracking array)
 		$this->reconcile_scheduled[ $post_id ] = true;
 		add_action( 'shutdown', function() use ( $post_id ) {
 			$this->reconcile_bundle_levels( (int) $post_id, array( 'source' => 'save_post' ) );
@@ -1365,6 +1345,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 		set_transient( $lock_key, 1, 5 ); // 5-second lock expiry
 
+		$did_work = false;
 		try {
 		// Step 2: Association discovery and context extraction
 		$state = $this->get_bundle_pmpro_state( $bundle_id, array( 'source' => $src ) );
@@ -1382,24 +1363,29 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// IMPORTANT: Only treat as free if selling_option is NOT set to a paid option
 		// (TutorPress bundles default to price_type='free', but selling_option takes precedence)
 		$is_paid_selling_option = in_array( $selling_option, array( 'subscription', 'one_time', 'both', 'all' ), true );
-		if ( ( 'free' === $price_type || $regular_price <= 0 ) && ! $is_paid_selling_option ) {
+		if ( '' !== $selling_option && ( 'free' === $price_type || $regular_price <= 0 ) && ! $is_paid_selling_option ) {
 			$this->handle_free_branch( $bundle_id, $state );
+			$did_work = true;
 			return;
 		}
 		if ( 'membership' === $selling_option ) {
 			$this->handle_membership_branch( $bundle_id, $state );
+			$did_work = true;
 			return;
 		}
 		if ( 'subscription' === $selling_option ) {
 			$this->handle_subscription_branch( $bundle_id, $state, 'course-bundle' );
+			$did_work = true;
 			return;
 		}
 		if ( 'one_time' === $selling_option ) {
 			$this->handle_one_time_branch( $bundle_id, $state, 'course-bundle' );
+			$did_work = true;
 			return;
 		}
 		if ( 'both' === $selling_option || 'all' === $selling_option ) {
 			$this->handle_both_and_all_branch( $bundle_id, $state, 'course-bundle' );
+			$did_work = true;
 			return;
 		}
 		// Default: ensure meta matches valid IDs (fallback for undefined selling options)
@@ -1411,8 +1397,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( 'publish' !== get_post_status( $bundle_id ) ) {
 				$this->toggle_allow_signups( $bundle_id, 0 );
 			}
-			// Always cleanup lock, even if exception or early return
-			delete_transient( $lock_key );
+			// No-op runs release the lock so a follow-up save can reconcile; real work keeps the lock for TTL.
+			if ( ! $did_work ) {
+				delete_transient( $lock_key );
+			}
 		}
 	}
 
