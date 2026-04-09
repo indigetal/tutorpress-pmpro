@@ -532,8 +532,8 @@ class Enrollment_Handler {
 				) );
 			}
 
-			$current_course_data = ! empty( $current_level_ids ) ? $this->get_courses_for_levels( $current_level_ids ) : array( 'all_courses' => array(), 'bundle_courses' => array(), 'regular_courses' => array() );
-			$old_course_data     = ! empty( $old_level_ids ) ? $this->get_courses_for_levels( $old_level_ids ) : array( 'all_courses' => array(), 'bundle_courses' => array(), 'regular_courses' => array() );
+			$current_course_data = ! empty( $current_level_ids ) ? $this->get_courses_for_levels( $current_level_ids ) : array( 'all_courses' => array(), 'bundle_courses' => array(), 'category_courses' => array(), 'regular_courses' => array() );
+			$old_course_data     = ! empty( $old_level_ids ) ? $this->get_courses_for_levels( $old_level_ids ) : array( 'all_courses' => array(), 'bundle_courses' => array(), 'category_courses' => array(), 'regular_courses' => array() );
 
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( sprintf(
@@ -544,7 +544,7 @@ class Enrollment_Handler {
 				) );
 			}
 
-			// Filter courses: exclude free/public for regular courses, but keep ALL bundle courses
+			// Filter courses: exclude free/public for regular courses; keep all bundle and category-wise courses
 			$current_courses = $this->filter_courses_by_pricing( $current_course_data );
 			$old_courses = $this->filter_courses_by_pricing( $old_course_data );
 
@@ -714,48 +714,50 @@ class Enrollment_Handler {
 	 * Filter courses based on pricing type and enrollment source.
 	 * 
 	 * For regular course-specific levels, we filter out free/public courses since they should
-	 * be accessible to everyone without a membership. However, for bundle courses, we keep ALL
-	 * courses (including free ones) because the user paid for the bundle, which provides a
-	 * curated learning path that includes both paid and free courses.
+	 * be accessible to everyone without a membership. For bundle and category-wise membership
+	 * courses, we keep ALL courses (including free ones) because access was purchased via the
+	 * bundle or category membership.
 	 *
 	 * @since 1.0.0
 	 *
 	 * @param array $course_data Course data from get_courses_for_levels() with keys:
 	 *                             - 'all_courses': All course IDs
 	 *                             - 'bundle_courses': Courses from bundles
+	 *                             - 'category_courses': Courses from category-wise levels
 	 *                             - 'regular_courses': Course-specific level enrollments
 	 * @return array Filtered array of course IDs to enroll/unenroll.
 	 */
 	private function filter_courses_by_pricing( $course_data ) {
-		$regular_courses = $course_data['regular_courses'];
-		$bundle_courses  = $course_data['bundle_courses'];
-		
+		$regular_courses  = isset( $course_data['regular_courses'] ) ? $course_data['regular_courses'] : array();
+		$bundle_courses   = isset( $course_data['bundle_courses'] ) ? $course_data['bundle_courses'] : array();
+		// Populated by get_courses_for_levels for levels with TUTORPRESS_PMPRO_membership_model = category_wise_membership.
+		$category_courses = isset( $course_data['category_courses'] ) ? $course_data['category_courses'] : array();
+
 		// Filter regular courses - exclude free/public courses since users get automatic access
 		$filtered_regular = array_values( array_filter( $regular_courses, function ( $cid ) {
-			return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes' 
+			return get_post_meta( $cid, '_tutor_is_public_course', true ) !== 'yes'
 				&& get_post_meta( $cid, '_tutor_course_price_type', true ) !== 'free';
 		} ) );
-		
-		// Bundle courses - keep ALL courses including free ones
-		// Users paid for the bundle, so they should be enrolled/unenrolled from all bundle courses
-		
-		// Merge and return all courses user should have access to
-		return array_values( array_unique( array_merge( $filtered_regular, $bundle_courses ) ) );
+
+		// Bundle and category-wise courses - keep ALL courses including free ones
+
+		return array_values( array_unique( array_merge( $filtered_regular, $bundle_courses, $category_courses ) ) );
 	}
 
 	/**
 	 * Get all courses mapped to a set of PMPro membership levels.
 	 *
-	 * Uses two lookup strategies:
+	 * Uses lookup strategies:
 	 * 1. pmpro_memberships_pages table (standard PMPro restriction)
 	 * 2. Level meta reverse lookup (course-specific levels via tutorpress_course_id)
 	 * 3. Bundle expansion (bundle-specific levels via tutorpress_bundle_id)
+	 * 4. Category-wise membership (published courses in level-assigned course categories)
 	 *
 	 * @since 1.0.0
 	 *
 	 * @param int|array|object $level_ids Level ID(s) or level object(s).
 	 * @param bool             $include_bundle_courses Whether to include courses from bundles (default true).
-	 * @return array Associative array with 'all_courses', 'bundle_courses', and 'regular_courses' keys.
+	 * @return array Associative array with 'all_courses', 'bundle_courses', 'category_courses', and 'regular_courses' keys.
 	 */
 	private function get_courses_for_levels( $level_ids, $include_bundle_courses = true ) {
 		global $wpdb;
@@ -771,14 +773,16 @@ class Enrollment_Handler {
 		$level_ids = array_values( array_filter( array_map( 'absint', $level_ids ) ) );
 		if ( empty( $level_ids ) ) {
 			return array(
-				'all_courses'     => array(),
-				'bundle_courses'  => array(),
-				'regular_courses' => array(),
+				'all_courses'       => array(),
+				'bundle_courses'    => array(),
+				'category_courses'  => array(),
+				'regular_courses'   => array(),
 			);
 		}
 
 		$course_ids = array();
-		$bundle_course_ids = array(); // Track which courses come from bundles
+		$bundle_course_ids   = array(); // Track which courses come from bundles
+		$category_course_ids = array(); // Track which courses come from category-wise levels
 
 		// Primary: pmpro_memberships_pages table (courses only)
 		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
@@ -858,15 +862,60 @@ class Enrollment_Handler {
 			}
 		}
 
+		// Category-wise membership: all published courses in categories assigned to the level.
+		foreach ( $level_ids as $cw_level_id ) {
+			$cw_level_id = (int) $cw_level_id;
+			if ( $cw_level_id <= 0 ) {
+				continue;
+			}
+			$model = get_pmpro_membership_level_meta( $cw_level_id, 'TUTORPRESS_PMPRO_membership_model', true );
+			if ( 'category_wise_membership' !== $model ) {
+				continue;
+			}
+			$level_obj    = new \PMPro_Membership_Level();
+			$category_ids = $level_obj->get_membership_level_categories( $cw_level_id );
+			if ( empty( $category_ids ) || ! is_array( $category_ids ) ) {
+				continue;
+			}
+			$category_ids = array_values( array_filter( array_map( 'absint', $category_ids ) ) );
+			if ( empty( $category_ids ) ) {
+				continue;
+			}
+			$cat_course_ids = get_posts(
+				array(
+					'post_type'      => tutor()->course_post_type,
+					'post_status'    => 'publish',
+					'posts_per_page' => -1,
+					'fields'         => 'ids',
+					'no_found_rows'  => true,
+					'tax_query'      => array(
+						array(
+							'taxonomy' => 'course-category',
+							'field'    => 'term_id',
+							'terms'    => $category_ids,
+							'operator' => 'IN',
+						),
+					),
+				)
+			);
+			if ( is_array( $cat_course_ids ) && ! empty( $cat_course_ids ) ) {
+				$cat_course_ids = array_map( 'intval', $cat_course_ids );
+				$course_ids           = array_merge( $course_ids, $cat_course_ids );
+				$category_course_ids  = array_merge( $category_course_ids, $cat_course_ids );
+			}
+		}
+
 		// Remove duplicates
 		$course_ids = array_values( array_unique( array_map( 'intval', $course_ids ) ) );
-		$bundle_course_ids = array_values( array_unique( array_map( 'intval', $bundle_course_ids ) ) );
+		$bundle_course_ids   = array_values( array_unique( array_map( 'intval', $bundle_course_ids ) ) );
+		$category_course_ids = array_values( array_unique( array_map( 'intval', $category_course_ids ) ) );
 
-		// Return array with bundle tracking information
+		// Return array with bundle and category-wise tracking information
 		return array(
-			'all_courses'     => $course_ids,
-			'bundle_courses'  => $bundle_course_ids,
-			'regular_courses' => array_values( array_diff( $course_ids, $bundle_course_ids ) ),
+			'all_courses'       => $course_ids,
+			'bundle_courses'    => $bundle_course_ids,
+			'category_courses'  => $category_course_ids,
+			'regular_courses'   => array_values( array_diff( $course_ids, $bundle_course_ids, $category_course_ids ) ),
 		);
 	}
 
