@@ -94,7 +94,8 @@ class Pricing_Display {
 		
 		// Phase 4: Alter bundle enrollment status for entry box
 		add_filter( 'tutor_alter_enroll_status', array( $this, 'alter_bundle_enroll_status' ), 10, 1 );
-		
+		add_filter( 'tutor_alter_enroll_status', array( $this, 'alter_category_wise_enroll_status' ), 10, 1 );
+
 		// Phase 4: Override Tutor Pro's bundle enrolled content to fix anchor link
 		add_filter( 'tutor/course/single/entry-box/is_enrolled', array( $this, 'fix_bundle_enrolled_content' ), 11, 2 );
 		
@@ -204,6 +205,46 @@ class Pricing_Display {
 
 		// If enrolled via PMPro, return true to show enrollment info
 		if ( $bundle_enrolled ) {
+			return true;
+		}
+
+		return $is_enrolled;
+	}
+
+	/**
+	 * Treat category-wise (and other) PMPro access as enrolled for entry-box display.
+	 *
+	 * When the student has membership access but no Tutor enrollment row, the global
+	 * `$is_enrolled` from the template stays false; this aligns the entry box with
+	 * `has_course_access` without writing enrollments (see `tutor_alter_enroll_status`).
+	 *
+	 * @since 1.0.0
+	 * @param mixed $is_enrolled Current enrollment status (often bool or enrollment object).
+	 * @return mixed
+	 */
+	public function alter_category_wise_enroll_status( $is_enrolled ) {
+		if ( $is_enrolled ) {
+			return $is_enrolled;
+		}
+
+		if ( ! is_user_logged_in() ) {
+			return $is_enrolled;
+		}
+
+		$course_id = (int) get_the_ID();
+		if ( $course_id <= 0 ) {
+			return $is_enrolled;
+		}
+
+		if ( ! function_exists( 'tutor' ) ) {
+			return $is_enrolled;
+		}
+
+		if ( tutor()->course_post_type !== get_post_type( $course_id ) ) {
+			return $is_enrolled;
+		}
+
+		if ( true === $this->access_checker->has_course_access( $course_id, get_current_user_id() ) ) {
 			return true;
 		}
 
@@ -350,8 +391,14 @@ class Pricing_Display {
 			// - array of required levels if user doesn't have access
 			$user_has_access = $this->access_checker->has_course_access( $course_id );
 
-			// Only show original HTML if user truly has access (returns exactly true)
+			// Only show original HTML if user truly has access (returns exactly true).
+			// Without enrollment, $html is still the pricing template — load Tutor's continue template (same as enrolled).
 			if ( $user_has_access === true ) {
+				if ( is_user_logged_in() && ! $is_bundle ) {
+					ob_start();
+					tutor_load_template( 'loop.course-continue' );
+					return ob_get_clean();
+				}
 				return $html;
 			}
 
@@ -381,6 +428,16 @@ class Pricing_Display {
 				if ( $is_pmpro_enrollment ) {
 					return $html;
 				}
+			}
+		}
+
+		// Category-wise / access without Tutor enrollment: $html is pricing markup; swap in Tutor's loop continue UI.
+		if ( is_user_logged_in() && ! $is_bundle ) {
+			$loop_access = $this->access_checker->has_course_access( $course_id, get_current_user_id() );
+			if ( true === $loop_access ) {
+				ob_start();
+				tutor_load_template( 'loop.course-continue' );
+				return ob_get_clean();
 			}
 		}
 
