@@ -547,6 +547,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return $pre_option;
 		}
 
+		if ( doing_action( 'save_post' ) || doing_action( 'save_post_course-bundle' ) ) {
+			return $pre_option;
+		}
+
 		// Prefer core monetization helper, fall back to tutor_utils() and raw DB read
 		if ( function_exists( 'tutorpress_monetization' ) ) {
 			if ( ! tutorpress_monetization()->is_pmpro() ) {
@@ -564,6 +568,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( 'pmpro' !== $monetize_by ) {
 				return $pre_option;
 			}
+		}
+
+		if ( ! isset( $options ) ) {
+			$this->recursion_guard = true;
+			$options = get_option( 'tutor_option', array() );
+			$this->recursion_guard = false;
 		}
 
 		// Check if we're in Course Bundle context
