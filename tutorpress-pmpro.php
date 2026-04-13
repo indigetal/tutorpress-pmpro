@@ -3,7 +3,7 @@
  * Plugin Name: TutorPress - PMPro Integration
  * Plugin URI: https://www.paidmembershipspro.com/
  * Description: Integrate Paid Memberships Pro with Tutor LMS via the TutorPress addon.
- * Version: 1.0.5
+ * Version: 1.0.6
  * Author: Indigetal WebCraft
  * Text Domain: tutorpress-pmpro
  */

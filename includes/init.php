@@ -87,6 +87,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Ensure tutor_bundle_post_type filter returns course-bundle when PMPro is selected
 		add_filter( 'tutor_bundle_post_type', array( $this, 'ensure_bundle_post_type_for_pmpro' ), 10, 1 );
 
+		// Override is_monetize_by_tutor() for Course Bundle contexts on every page load.
+		add_filter( 'pre_option_tutor_option', array( $this, 'intercept_tutor_utils_for_course_bundle' ), 10, 2 );
+
         // Prefer centralized core monetization helper when available; fall back to tutor_utils
         if ( function_exists( 'tutorpress_monetization' ) ) {
             $has_pmpro = tutorpress_monetization()->is_pmpro();
@@ -335,11 +338,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$backtrace = debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS, 15 );
 		foreach ( $backtrace as $frame ) {
 			if ( isset( $frame['class'] ) && false !== strpos( $frame['class'], 'CourseBundle' ) ) {
-				// Return 'tutor' so Course Bundle sees an allowed monetization type.
-				return 'tutor';
-			}
-			if ( isset( $frame['file'] ) && false !== strpos( $frame['file'], 'course-bundle' ) ) {
-				// Also catch file-based calls within Course Bundle addon
 				return 'tutor';
 			}
 		}
@@ -581,10 +579,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$in_bundle_context = false;
 		foreach ( $backtrace as $frame ) {
 			if ( isset( $frame['class'] ) && false !== strpos( $frame['class'], 'CourseBundle' ) ) {
-				$in_bundle_context = true;
-				break;
-			}
-			if ( isset( $frame['file'] ) && false !== strpos( $frame['file'], 'course-bundle' ) ) {
 				$in_bundle_context = true;
 				break;
 			}
@@ -1479,6 +1473,43 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * Sync PMPro level and bundle post meta for checkout, strikethrough display, and Tutor Pro ribbon.
+	 *
+	 * @param int   $bundle_id    Bundle post ID.
+	 * @param int   $level_id     PMPro membership level ID.
+	 * @param float $bundle_price Instructor-set bundle price (PMPro checkout amount).
+	 * @return void
+	 */
+	private function set_bundle_pricing_meta( $bundle_id, $level_id, $bundle_price ) {
+		$bundle_id    = (int) $bundle_id;
+		$level_id     = (int) $level_id;
+		$bundle_price = floatval( $bundle_price );
+
+		global $wpdb;
+		$wpdb->update(
+			$wpdb->pmpro_membership_levels,
+			array( 'initial_payment' => $bundle_price ),
+			array( 'id' => $level_id ),
+			array( '%f' ),
+			array( '%d' )
+		);
+
+		$total_value = $this->calculate_bundle_regular_price( $bundle_id );
+
+		if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_price', $bundle_price );
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_total_value', $total_value );
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', $total_value );
+			update_pmpro_membership_level_meta( $level_id, 'tutorpress_sale_price', $bundle_price );
+		}
+
+		update_post_meta( $bundle_id, 'tutor_course_sale_price', $bundle_price );
+		update_post_meta( $bundle_id, '_tutor_course_price_type', 'paid' );
+
+		$this->log( '[TP-PMPRO] set_bundle_pricing_meta bundle=' . $bundle_id . ' level_id=' . $level_id . ' bundle_price=' . $bundle_price . ' total_value=' . $total_value );
+	}
+
+	/**
 	 * Handle One-time-only branch: keep one-time levels, remove recurring levels.
 	 * If multiple one-time levels exist, prefer the first and keep all one-time ids by default.
 	 *
@@ -1584,26 +1615,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 			
 			// Step 3.5: Handle pricing
 			if ( $post_type === 'course-bundle' ) {
-				// BUNDLES: Set price directly (no sale price logic)
-				// Bundle price is instructor-set and used as-is
-				
-				global $wpdb;
-				$wpdb->update(
-					$wpdb->pmpro_membership_levels,
-					array( 'initial_payment' => $regular_price ),
-					array( 'id' => $level_id ),
-					array( '%f' ),
-					array( '%d' )
-				);
-				
-				// Store bundle price in meta for reference
-				update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_price', $regular_price );
-				
-				// Store total course value for informational purposes
-				$total_value = $this->calculate_bundle_regular_price( $object_id );
-				update_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_total_value', $total_value );
-				
-				$this->log( '[TP-PMPRO] handle_one_time_branch set_bundle_price level_id=' . $level_id . ' bundle=' . $object_id . ' price=' . $regular_price . ' total_value=' . $total_value );
+				// BUNDLES: Checkout price, display meta, and Tutor Pro ribbon post meta (no course sale-price path).
+				$this->set_bundle_pricing_meta( $object_id, $level_id, $regular_price );
 			} else{
 				// COURSES: Use full sale price logic (supports time-limited sales)
 				$this->handle_sale_price_for_one_time( $object_id, $level_id, $regular_price, $post_type );
@@ -1900,7 +1913,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 					
 					// Handle sale price for the newly created one-time level
 					$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
-					
+
+					if ( 'course-bundle' === $post_type ) {
+						$this->set_bundle_pricing_meta( $course_id, $level_id, $regular_price );
+					}
+
 					$one_time[] = $level_id;
 					$this->log( '[TP-PMPRO] handle_both_and_all_branch created_one_time_level_id=' . $level_id . ' ' . $object_label . '=' . $course_id . ' price=' . $regular_price );
 				}
@@ -1932,6 +1949,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 				
 				// Handle sale price (which will also update initial_payment)
 				$this->handle_sale_price_for_one_time( $course_id, $existing_level_id, $regular_price );
+
+				if ( 'course-bundle' === $post_type ) {
+					$this->set_bundle_pricing_meta( $course_id, $existing_level_id, $regular_price );
+				}
 			}
 			
 			$this->log( '[TP-PMPRO] handle_both_and_all_branch one_time_level_exists; ' . $object_label . '=' . $course_id . ' level_id=' . $existing_level_id );
