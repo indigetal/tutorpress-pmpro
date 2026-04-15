@@ -1113,7 +1113,47 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * Get the regular price for a single course from its PMPro level.
+	 *
+	 * Under PMPro monetization, the authoritative regular price lives in
+	 * the PMPro level meta (tutorpress_regular_price), not in the Tutor
+	 * native tutor_course_price post meta which can be stale.
+	 *
+	 * Fallback chain: PMPro level meta → PMPro initial_payment → tutor_course_price post meta.
+	 *
+	 * @since 1.0.0
+	 * @param int $course_id Course post ID.
+	 * @return float The course regular price, or 0.0 if not found.
+	 */
+	private function get_course_pmpro_regular_price( $course_id ) {
+		$course_id = (int) $course_id;
+
+		$level_ids = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
+		if ( is_array( $level_ids ) && ! empty( $level_ids ) ) {
+			$level_id = (int) $level_ids[0];
+
+			$regular_meta = get_pmpro_membership_level_meta( $level_id, 'tutorpress_regular_price', true );
+			if ( ! empty( $regular_meta ) && floatval( $regular_meta ) > 0 ) {
+				return floatval( $regular_meta );
+			}
+
+			if ( function_exists( 'pmpro_getLevel' ) ) {
+				$level = pmpro_getLevel( $level_id );
+				if ( $level && floatval( $level->initial_payment ) > 0 ) {
+					return floatval( $level->initial_payment );
+				}
+			}
+		}
+
+		$post_meta_price = get_post_meta( $course_id, 'tutor_course_price', true );
+		return ! empty( $post_meta_price ) ? floatval( $post_meta_price ) : 0.0;
+	}
+
+	/**
 	 * Calculate bundle regular price by summing regular prices of included courses.
+	 *
+	 * Uses get_course_pmpro_regular_price() to read from the authoritative
+	 * PMPro level meta rather than the potentially stale tutor_course_price post meta.
 	 *
 	 * @since 1.0.0
 	 * @param int $bundle_id Bundle post ID.
@@ -1122,12 +1162,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 	private function calculate_bundle_regular_price( $bundle_id ) {
 		$bundle_id = (int) $bundle_id;
 		$course_ids_meta = get_post_meta( $bundle_id, 'bundle-course-ids', true );
-		
+
 		if ( empty( $course_ids_meta ) ) {
 			return 0.0;
 		}
-		
-		// Handle comma-separated string or array
+
 		if ( is_string( $course_ids_meta ) ) {
 			$course_ids = array_filter( array_map( 'intval', explode( ',', $course_ids_meta ) ) );
 		} elseif ( is_array( $course_ids_meta ) ) {
@@ -1135,26 +1174,26 @@ if ( ! defined( 'ABSPATH' ) ) {
 		} else {
 			return 0.0;
 		}
-		
+
 		if ( empty( $course_ids ) ) {
 			return 0.0;
 		}
-		
+
 		$total = 0.0;
 		foreach ( $course_ids as $course_id ) {
 			$course_id = (int) $course_id;
-			// Skip free courses in calculation
+
 			$price_type = get_post_meta( $course_id, '_tutor_course_price_type', true );
 			if ( 'free' === $price_type ) {
 				continue;
 			}
-			
-			$price = get_post_meta( $course_id, 'tutor_course_price', true );
-			if ( $price && $price > 0 ) {
-				$total += floatval( $price );
+
+			$price = $this->get_course_pmpro_regular_price( $course_id );
+			if ( $price > 0 ) {
+				$total += $price;
 			}
 		}
-		
+
 		return $total;
 	}
 
