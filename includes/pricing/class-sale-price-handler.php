@@ -287,9 +287,16 @@ class Sale_Price_Handler {
 	 * @return array Modified email data.
 	 */
 	public function filter_email_data_sale_price( $data, $email ) {
-		// PMPro emails include membership level data
+		if ( $this->discount_code_used_at_checkout ) {
+			return $data;
+		}
+
+		if ( ! $this->sale_applied_at_checkout ) {
+			return $data;
+		}
+
 		if ( ! empty( $data['membership_level'] ) && ! empty( $data['membership_level']->id ) ) {
-			$level_id = $data['membership_level']->id;
+			$level_id     = $data['membership_level']->id;
 			$active_price = $this->get_active_price_for_level( $level_id );
 
 			if ( $active_price['on_sale'] ) {
@@ -318,6 +325,10 @@ class Sale_Price_Handler {
 	 */
 	public function filter_invoice_sale_note( $order ) {
 		if ( empty( $order->membership_id ) ) {
+			return;
+		}
+
+		if ( ! empty( $order->discount_code_id ) ) {
 			return;
 		}
 
