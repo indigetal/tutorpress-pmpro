@@ -27,6 +27,22 @@ namespace TUTORPRESS_PMPRO\Pricing;
 class Sale_Price_Handler {
 
 	/**
+	 * Whether the sale price was applied at checkout this request.
+	 *
+	 * @since 1.0.0
+	 * @var bool
+	 */
+	private $sale_applied_at_checkout = false;
+
+	/**
+	 * Whether a discount code was present on the checkout level this request.
+	 *
+	 * @since 1.0.0
+	 * @var bool
+	 */
+	private $discount_code_used_at_checkout = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @since 1.0.0
@@ -168,10 +184,18 @@ class Sale_Price_Handler {
 			return $level;
 		}
 
+		if ( ! empty( $level->code_id ) || ! empty( $level->discount_code ) ) {
+			$this->discount_code_used_at_checkout = true;
+			return $level;
+		}
+
 		$active_price = $this->get_active_price_for_level( $level->id );
 
 		if ( $active_price['on_sale'] ) {
-			$level->initial_payment = $active_price['price'];
+			$level->tutorpress_sale_applied   = true;
+			$level->tutorpress_regular_price = $active_price['regular_price'];
+			$this->sale_applied_at_checkout  = true;
+			$level->initial_payment          = $active_price['price'];
 
 			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 				error_log( sprintf(
@@ -208,52 +232,47 @@ class Sale_Price_Handler {
 			return $text;
 		}
 
+		if ( ! empty( $level->code_id ) || ! empty( $level->discount_code ) || $this->discount_code_used_at_checkout ) {
+			return $text;
+		}
+
 		$active_price = $this->get_active_price_for_level( $level->id );
 
 		if ( ! $active_price['on_sale'] || ! function_exists( 'pmpro_formatPrice' ) ) {
 			return $text;
 		}
 
-		$sale_formatted = pmpro_formatPrice( $active_price['price'] );
-		$regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
+		$sale_formatted    = pmpro_formatPrice( $active_price['price'] );
+		$is_checkout       = ! empty( $level->tutorpress_sale_applied );
+		$is_subscription   = ! empty( $level->billing_amount ) && floatval( $level->billing_amount ) > 0
+		                   && ! empty( $level->cycle_number ) && intval( $level->cycle_number ) > 0;
+		$is_short_format   = $is_subscription && strpos( $text, ' now ' ) === false;
+		$billing_formatted = $is_subscription ? pmpro_formatPrice( $level->billing_amount ) : '';
 
-		// Check if this is a subscription (has recurring payments)
-		$is_subscription = ! empty( $level->billing_amount ) && ! empty( $level->cycle_number );
-
-		if ( $is_subscription ) {
-			// For subscriptions: Find where the sale price appears and add strikethrough regular price before it
-			// Two patterns:
-			// 1. Full format: "$20.00 now" → "~~$30.00~~ $20.00 now"
-			// 2. Short format: "$20.00 per Month" → "~~$30.00~~ $20.00 now and then $30.00 per Month"
-			
-			// Try full format first (with "now")
-			$pattern_full = '/' . preg_quote( $sale_formatted, '/' ) . '(\s+now)/i';
-			if ( preg_match( $pattern_full, $text ) ) {
-				$replacement = '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . $sale_formatted . '$1';
-				$text = preg_replace( $pattern_full, $replacement, $text, 1 );
-			} else {
-				// Short format - reconstruct the full text
-				// PMPro might show just "$20 per Month" (the recurring), but we need to show initial + recurring
-				$recurring_formatted = function_exists( 'pmpro_formatPrice' ) ? pmpro_formatPrice( $level->billing_amount ) : '';
-				$cycle_text = '';
-				
-				if ( ! empty( $level->cycle_number ) && ! empty( $level->cycle_period ) ) {
-					$cycle_text = ' per ' . $level->cycle_period;
-				}
-				
-				// Build: "~~$30~~ $20 now and then $30 per Month"
-				$text = '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . 
-						$sale_formatted . ' now and then ' . $recurring_formatted . $cycle_text . '.';
-			}
+		if ( $is_checkout ) {
+			$search            = $sale_formatted;
+			$regular_formatted = pmpro_formatPrice( $level->tutorpress_regular_price );
 		} else {
-			// For one-time purchases: Replace regular price with strikethrough regular + sale
-			// PMPro shows the regular price from DB, we need to show it struck through + sale price
-			$text = str_replace(
-				$regular_formatted,
-				'<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span> ' . $sale_formatted,
-				$text
-			);
+			$regular_formatted = pmpro_formatPrice( $active_price['regular_price'] );
+			$search            = $regular_formatted;
 		}
+
+		$strikethrough = '<span style="text-decoration: line-through; opacity: 0.6;">' . $regular_formatted . '</span>';
+
+		if ( $is_short_format ) {
+			$replace_with = $strikethrough . ' ' . $sale_formatted . ' now and then ' . $billing_formatted;
+		} else {
+			$replace_with = $strikethrough . ' ' . $sale_formatted;
+		}
+
+		$text = preg_replace_callback(
+			'/' . preg_quote( $search, '/' ) . '/',
+			function () use ( $replace_with ) {
+				return $replace_with;
+			},
+			$text,
+			1
+		);
 
 		return $text;
 	}
