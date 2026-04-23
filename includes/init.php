@@ -1577,6 +1577,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		// Step 2: Ensure exactly one one-time level exists (upsert logic)
 		$level_id = 0;
+		$created_one_time_level = false;
 		// Get price based on post type
 		// BUNDLES: Use instructor-set bundle price directly (no sale price logic)
 		// COURSES: Use instructor-set regular price (will use sale price logic later)
@@ -1624,6 +1625,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 				$wpdb->insert( $wpdb->pmpro_membership_levels, $insert_data );
 				$level_id = (int) $wpdb->insert_id;
 				if ( $level_id > 0 ) {
+					$created_one_time_level = true;
 					$this->log( '[TP-PMPRO] handle_one_time_branch created_level_id=' . $level_id . ' ' . $object_label . '=' . $object_id . ' (initial_payment will be set by sale_price logic)' );
 				}
 			} else {
@@ -1647,8 +1649,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
 			$this->log( '[TP-PMPRO] handle_one_time_branch ensured_association level_id=' . $level_id . ' ' . $object_label . '=' . $object_id );
 			
-			// Phase 5: Add level to course/bundle group
-			self::add_level_to_course_group( $object_id, $level_id, $post_type );
+			if ( $created_one_time_level ) {
+				// Phase 5: Add level to course/bundle group
+				self::add_level_to_course_group( $object_id, $level_id, $post_type );
+			}
 			
 			// Step 3.5: Handle pricing
 			if ( $post_type === 'course-bundle' ) {
@@ -1968,9 +1972,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
 			
 			if ( $regular_price > 0 ) {
-				// Phase 5: Ensure level is in course group
-				self::add_level_to_course_group( $course_id, $existing_level_id, $post_type );
-				
 				// Handle sale price (which will also update initial_payment)
 				$this->handle_sale_price_for_one_time( $course_id, $existing_level_id, $regular_price );
 
@@ -2200,6 +2201,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		// If an existing one-time level exists, update it. Otherwise create a new one.
 		$level_id = 0;
+		$created_one_time_level = false;
 		if ( ! empty( $one_time_ids ) ) {
 			$level_id = (int) $one_time_ids[0];
 			$wpdb->update( $wpdb->pmpro_membership_levels, $update_level_data, array( 'id' => $level_id ), array( '%f', '%f', '%d', '%s', '%d' ), array( '%d' ) );
@@ -2208,6 +2210,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$table = $wpdb->pmpro_membership_levels;
 			$wpdb->insert( $table, $db_level_data );
 			$level_id = $wpdb->insert_id;
+			if ( $level_id > 0 ) {
+				$created_one_time_level = true;
+			}
 					
 		}
 
@@ -2224,8 +2229,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 			\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $object_id, $level_id );
 		}
 
-		// Phase 5: Add level to course group
-		self::add_level_to_course_group( $object_id, $level_id );
+		if ( $created_one_time_level ) {
+			// Phase 5: Add level to course group
+			self::add_level_to_course_group( $object_id, $level_id );
+		}
 
 		// Successfully attached the level.
 	}
@@ -2365,21 +2372,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 		if ( $existing_group_id && function_exists( 'pmpro_get_level_group' ) ) {
 			$group = pmpro_get_level_group( $existing_group_id );
 			if ( $group ) {
-				// Sync group name with current title (handles renames)
-				if ( $group->name !== $group_name ) {
-					$wpdb->update(
-						$groups_table,
-						array( 'name' => $group_name ),
-						array( 'id' => $existing_group_id ),
-						array( '%s' ),
-						array( '%d' )
-					);
-					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-						$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
-						error_log( '[TP-PMPRO] get_or_create_course_level_group updated_group_name; group=' . $existing_group_id . ' old="' . $group->name . '" new="' . $group_name . '" ' . $object_label . '=' . $object_id );
-					}
-				}
-				
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 					$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
 					error_log( '[TP-PMPRO] get_or_create_course_level_group found_existing_group=' . $existing_group_id . ' ' . $object_label . '=' . $object_id );
@@ -2452,13 +2444,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		
 		$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
 		
-		if ( $existing_group && (int) $existing_group !== (int) $group_id ) {
-			// Level is in a different group - remove it first
-			$wpdb->delete( $groups_levels_table, array( 'level' => $level_id ), array( '%d' ) );
-		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] add_level_to_course_group removed level from old group=' . $existing_group . '; level=' . $level_id . ' ' . $object_label . '=' . $object_id );
-			}
-		} elseif ( $existing_group && (int) $existing_group === (int) $group_id ) {
+		if ( $existing_group && (int) $existing_group === (int) $group_id ) {
 			// Already in the correct group
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] add_level_to_course_group already in group; level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id );
