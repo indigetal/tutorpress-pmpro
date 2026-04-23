@@ -1598,14 +1598,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$level_id = (int) $one_time[0];
 			global $wpdb;
 			$update_data = array(
-				'name'            => get_the_title( $object_id ) . ' (One-time)',
-				'description'     => get_post_field( 'post_excerpt', $object_id ) ?: '',
 				'billing_amount'  => 0,
 				'cycle_number'    => 0,
 				'cycle_period'    => '',
 				'billing_limit'   => 0,
 			);
-			$wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $level_id ), array( '%s', '%s', '%f', '%d', '%s', '%d' ), array( '%d' ) );
+			$wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $level_id ), array( '%f', '%d', '%s', '%d' ), array( '%d' ) );
 			$this->log( '[TP-PMPRO] handle_one_time_branch updated_level_id=' . $level_id . ' ' . $object_label . '=' . $object_id . ' (initial_payment handled by sale_price logic)' );
 		} else {
 			// No one-time level exists: create one
@@ -1970,19 +1968,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
 			
 			if ( $regular_price > 0 ) {
-				// Update the level's title and description
-				global $wpdb;
-				$wpdb->update(
-					$wpdb->pmpro_membership_levels,
-					array(
-						'name'        => get_the_title( $course_id ) . ' (One-time)',
-						'description' => get_post_field( 'post_excerpt', $course_id ) ?: '',
-					),
-					array( 'id' => $existing_level_id ),
-					array( '%s', '%s' ),
-					array( '%d' )
-				);
-				
 				// Phase 5: Ensure level is in course group
 				self::add_level_to_course_group( $course_id, $existing_level_id, $post_type );
 				
@@ -2191,6 +2176,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$db_level_data['cycle_number'] = 0;
 		$db_level_data['cycle_period'] = '';
 		$db_level_data['billing_limit'] = 0;
+		$update_level_data = array(
+			'initial_payment' => floatval( $regular_price ),
+			'billing_amount'  => 0,
+			'cycle_number'    => 0,
+			'cycle_period'    => '',
+			'billing_limit'   => 0,
+		);
 
 		// Remove meta array before inserting into PMPro DB.
 		unset( $db_level_data['meta'] );
@@ -2209,8 +2201,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// If an existing one-time level exists, update it. Otherwise create a new one.
 		$level_id = 0;
 		if ( ! empty( $one_time_ids ) ) {
-			$level_id = $one_time_ids[0];
-			$wpdb->update( $wpdb->pmpro_membership_levels, $db_level_data, array( 'id' => $level_id ) );
+			$level_id = (int) $one_time_ids[0];
+			$wpdb->update( $wpdb->pmpro_membership_levels, $update_level_data, array( 'id' => $level_id ), array( '%f', '%f', '%d', '%s', '%d' ), array( '%d' ) );
 			
 		} else {
 			$table = $wpdb->pmpro_membership_levels;
