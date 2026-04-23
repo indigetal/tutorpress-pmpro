@@ -131,6 +131,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Admin on-demand action for manual bundle reconciliation
 		add_filter( 'bulk_actions-edit-course-bundle', array( $this, 'add_reconcile_bulk_action' ) );
 		add_action( 'handle_bulk_actions-edit-course-bundle', array( $this, 'handle_reconcile_bulk_action' ), 10, 3 );
+
+		// PMPro admin direct-delete cleanup
+		add_action( 'pmpro_delete_membership_level', array( $this, 'cleanup_deleted_pmpro_level_meta' ), 10, 1 );
 	}
 
 	public function notice_tutor_missing() {
@@ -2055,6 +2058,201 @@ if ( ! defined( 'ABSPATH' ) ) {
 	}
 
 	/**
+	 * Remove a directly deleted PMPro level from TutorPress meta and normalize canonical pricing state.
+	 *
+	 * @param int $level_id The deleting PMPro membership level ID.
+	 * @return void
+	 */
+	public function cleanup_deleted_pmpro_level_meta( $level_id ) {
+		$level_id = absint( $level_id );
+		if ( $level_id <= 0 ) {
+			return;
+		}
+
+		$owner_context = $this->get_pmpro_delete_owner_context( $level_id );
+		if ( empty( $owner_context['object_id'] ) || empty( $owner_context['owner_meta_key'] ) ) {
+			return;
+		}
+
+		$object_id = (int) $owner_context['object_id'];
+		$remaining_state = $this->get_remaining_pmpro_state_for_owner( $object_id, $owner_context['owner_meta_key'], $level_id );
+		$remaining_valid_ids = isset( $remaining_state['valid_ids'] ) ? (array) $remaining_state['valid_ids'] : array();
+		$one_time_ids = isset( $remaining_state['one_time_ids'] ) ? (array) $remaining_state['one_time_ids'] : array();
+		$recurring_ids = isset( $remaining_state['recurring_ids'] ) ? (array) $remaining_state['recurring_ids'] : array();
+
+		if ( empty( $remaining_valid_ids ) ) {
+			delete_post_meta( $object_id, '_tutorpress_pmpro_levels' );
+			update_post_meta( $object_id, '_tutor_course_price_type', 'free' );
+			update_post_meta( $object_id, 'tutor_course_price', 0 );
+			update_post_meta( $object_id, 'tutor_course_sale_price', '' );
+			update_post_meta( $object_id, 'tutor_course_selling_option', 'free' );
+
+			// Try immediately, then retry after PMPro finishes deleting level-group rows.
+			self::delete_course_level_group_if_empty( $object_id );
+			add_action( 'shutdown', function() use ( $object_id ) {
+				self::delete_course_level_group_if_empty( $object_id );
+			}, 999 );
+
+			$this->log( '[TP-PMPRO] cleanup_deleted_pmpro_level_meta transitioned_to_free deleted_level=' . $level_id . ' ' . $owner_context['object_label'] . '=' . $object_id );
+			return;
+		}
+
+		update_post_meta( $object_id, '_tutorpress_pmpro_levels', $remaining_valid_ids );
+
+		if ( empty( $one_time_ids ) && ! empty( $recurring_ids ) ) {
+			update_post_meta( $object_id, '_tutor_course_price_type', 'paid' );
+			update_post_meta( $object_id, 'tutor_course_price', 0 );
+			update_post_meta( $object_id, 'tutor_course_sale_price', '' );
+			update_post_meta( $object_id, 'tutor_course_selling_option', 'subscription' );
+
+			$this->log( '[TP-PMPRO] cleanup_deleted_pmpro_level_meta normalized_to_subscription deleted_level=' . $level_id . ' ' . $owner_context['object_label'] . '=' . $object_id . ' recurring_remaining=' . count( $recurring_ids ) );
+			return;
+		}
+
+		update_post_meta( $object_id, '_tutor_course_price_type', 'paid' );
+
+		if ( ! empty( $one_time_ids ) && empty( $recurring_ids ) ) {
+			update_post_meta( $object_id, 'tutor_course_selling_option', 'one_time' );
+
+			$this->log( '[TP-PMPRO] cleanup_deleted_pmpro_level_meta normalized_to_one_time deleted_level=' . $level_id . ' ' . $owner_context['object_label'] . '=' . $object_id . ' one_time_remaining=' . count( $one_time_ids ) );
+			return;
+		}
+
+		$current_selling_option = get_post_meta( $object_id, 'tutor_course_selling_option', true );
+		$normalized_selling_option = in_array( $current_selling_option, array( 'both', 'all' ), true ) ? $current_selling_option : 'both';
+		update_post_meta( $object_id, 'tutor_course_selling_option', $normalized_selling_option );
+
+		$this->log( '[TP-PMPRO] cleanup_deleted_pmpro_level_meta normalized_to_mixed deleted_level=' . $level_id . ' ' . $owner_context['object_label'] . '=' . $object_id . ' one_time_remaining=' . count( $one_time_ids ) . ' recurring_remaining=' . count( $recurring_ids ) . ' selling_option=' . $normalized_selling_option );
+	}
+
+	/**
+	 * Resolve the owning course or bundle for a directly deleted PMPro level.
+	 *
+	 * @param int $level_id The deleting PMPro membership level ID.
+	 * @return array<string,mixed>
+	 */
+	private function get_pmpro_delete_owner_context( $level_id ) {
+		global $wpdb;
+
+		$level_id = absint( $level_id );
+		$course_id = 0;
+		$bundle_id = 0;
+
+		if ( function_exists( 'get_pmpro_membership_level_meta' ) ) {
+			$course_id = absint( get_pmpro_membership_level_meta( $level_id, 'tutorpress_course_id', true ) );
+			$bundle_id = absint( get_pmpro_membership_level_meta( $level_id, 'tutorpress_bundle_id', true ) );
+		} elseif ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$course_id = absint( $wpdb->get_var( $wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d AND meta_key = %s LIMIT 1",
+				$level_id,
+				'tutorpress_course_id'
+			) ) );
+			$bundle_id = absint( $wpdb->get_var( $wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d AND meta_key = %s LIMIT 1",
+				$level_id,
+				'tutorpress_bundle_id'
+			) ) );
+		}
+
+		if ( $course_id > 0 ) {
+			return array(
+				'object_id'      => $course_id,
+				'owner_meta_key' => 'tutorpress_course_id',
+				'object_label'   => 'course',
+			);
+		}
+
+		if ( $bundle_id > 0 ) {
+			return array(
+				'object_id'      => $bundle_id,
+				'owner_meta_key' => 'tutorpress_bundle_id',
+				'object_label'   => 'bundle',
+			);
+		}
+
+		return array();
+	}
+
+	/**
+	 * Discover and classify remaining valid PMPro levels for an owner during direct-delete handling.
+	 *
+	 * @param int    $object_id The owning course or bundle ID.
+	 * @param string $owner_meta_key Reverse meta key used by this owner.
+	 * @param int    $deleted_level_id The currently deleting PMPro level ID.
+	 * @return array{
+	 *     valid_ids:int[],
+	 *     one_time_ids:int[],
+	 *     recurring_ids:int[]
+	 * }
+	 */
+	private function get_remaining_pmpro_state_for_owner( $object_id, $owner_meta_key, $deleted_level_id ) {
+		global $wpdb;
+
+		$object_id = (int) $object_id;
+		$deleted_level_id = absint( $deleted_level_id );
+
+		$associated_ids = array();
+		if ( isset( $wpdb->pmpro_memberships_pages ) ) {
+			$associated_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d",
+				$object_id
+			) );
+		}
+		$associated_ids = array_map( 'intval', (array) $associated_ids );
+
+		$meta_ids = get_post_meta( $object_id, '_tutorpress_pmpro_levels', true );
+		if ( ! is_array( $meta_ids ) ) {
+			$meta_ids = array();
+		}
+		$meta_ids = array_map( 'intval', $meta_ids );
+
+		$reverse_meta_ids = array();
+		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
+			$reverse_meta_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT pmpro_membership_level_id FROM {$wpdb->pmpro_membership_levelmeta} WHERE meta_key = %s AND meta_value = %s",
+				$owner_meta_key,
+				(string) $object_id
+			) );
+		}
+		$reverse_meta_ids = array_map( 'intval', (array) $reverse_meta_ids );
+
+		$candidate_ids = array_values( array_unique( array_merge( $associated_ids, $meta_ids, $reverse_meta_ids ) ) );
+		$candidate_ids = array_values( array_filter( $candidate_ids, function( $candidate_id ) use ( $deleted_level_id ) {
+			return $candidate_id > 0 && $candidate_id !== $deleted_level_id;
+		} ) );
+
+		$valid_ids = array();
+		$one_time_ids = array();
+		$recurring_ids = array();
+		foreach ( $candidate_ids as $candidate_id ) {
+			$row = $wpdb->get_row( $wpdb->prepare(
+				"SELECT id, billing_amount, cycle_number FROM {$wpdb->pmpro_membership_levels} WHERE id = %d",
+				$candidate_id
+			), ARRAY_A );
+
+			if ( $row && isset( $row['id'] ) ) {
+				$valid_id = (int) $row['id'];
+				$valid_ids[] = $valid_id;
+				$billing = isset( $row['billing_amount'] ) ? (float) $row['billing_amount'] : 0.0;
+				$cycle = isset( $row['cycle_number'] ) ? (int) $row['cycle_number'] : 0;
+				$is_one_time = ( $billing <= 0 && $cycle === 0 );
+
+				if ( $is_one_time ) {
+					$one_time_ids[] = $valid_id;
+				} else {
+					$recurring_ids[] = $valid_id;
+				}
+			}
+		}
+
+		return array(
+			'valid_ids'     => array_values( array_unique( $valid_ids ) ),
+			'one_time_ids'  => array_values( array_unique( $one_time_ids ) ),
+			'recurring_ids' => array_values( array_unique( $recurring_ids ) ),
+		);
+	}
+
+	/**
 	 * Auto-create a one-time PMPro level when selling_option is one_time.
 	 *
 	 * @param int    $object_id   The course or bundle ID.
@@ -2368,16 +2566,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 		}
 
 		// Check if group already exists (stored in post meta)
-		$existing_group_id = get_post_meta( $object_id, '_tutorpress_pmpro_group_id', true );
-		if ( $existing_group_id && function_exists( 'pmpro_get_level_group' ) ) {
-			$group = pmpro_get_level_group( $existing_group_id );
-			if ( $group ) {
-				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
-					error_log( '[TP-PMPRO] get_or_create_course_level_group found_existing_group=' . $existing_group_id . ' ' . $object_label . '=' . $object_id );
+		$existing_group_id = absint( get_post_meta( $object_id, '_tutorpress_pmpro_group_id', true ) );
+		if ( $existing_group_id ) {
+			if ( function_exists( 'pmpro_get_level_group' ) ) {
+				$group = pmpro_get_level_group( $existing_group_id );
+				if ( $group ) {
+					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+						$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+						error_log( '[TP-PMPRO] get_or_create_course_level_group found_existing_group=' . $existing_group_id . ' ' . $object_label . '=' . $object_id );
+					}
+					return (int) $existing_group_id;
 				}
-				return (int) $existing_group_id;
 			}
+
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+				error_log( '[TP-PMPRO] get_or_create_course_level_group stale_group_id=' . $existing_group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
+			}
+			return false;
 		}
 
 		// Create new group
@@ -2523,14 +2729,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 		$post_type = get_post_type( $object_id );
 		$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
+		$group_exists = function_exists( 'pmpro_get_level_group' ) ? pmpro_get_level_group( $group_id ) : true;
+
+		if ( ! $group_exists ) {
+			delete_post_meta( $object_id, '_tutorpress_pmpro_group_id' );
+			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] delete_course_level_group_if_empty cleared_stale_group_meta=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
+			}
+			return;
+		}
 
 		$levels_in_group = pmpro_get_level_ids_for_group( $group_id );
 		if ( empty( $levels_in_group ) ) {
 			$deleted = pmpro_delete_level_group( $group_id );
-			if ( $deleted ) {
+			$group_still_exists = function_exists( 'pmpro_get_level_group' ) ? pmpro_get_level_group( $group_id ) : ! $deleted;
+			if ( $deleted || ! $group_still_exists ) {
 				delete_post_meta( $object_id, '_tutorpress_pmpro_group_id' );
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					error_log( '[TP-PMPRO] delete_course_level_group_if_empty deleted_group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
+					$log_action = $deleted ? 'deleted_group=' : 'cleared_deleted_group_meta=';
+					error_log( '[TP-PMPRO] delete_course_level_group_if_empty ' . $log_action . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
 				}
 			} else {
 				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
