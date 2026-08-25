@@ -256,6 +256,57 @@ class Access_Checker implements Access_Checker_Interface {
 	}
 
 	/**
+	 * Whether a membership-created enrollment should be denied at access time.
+	 *
+	 * Deny when a tutor_enrolled post exists for the course+user, that post has
+	 * membership-created meta, current membership does not grant the course
+	 * (has_course_access !== true), and the user is not privileged/IA.
+	 *
+	 * @since 1.0.7
+	 *
+	 * @param int      $course_id Course post ID.
+	 * @param int|null $user_id   User ID (defaults to current user, 0 for logged-out users).
+	 *
+	 * @return bool True to deny, false otherwise.
+	 */
+	public function should_deny_membership_enrollment( $course_id, $user_id = null ) {
+		$course_id = absint( $course_id );
+		$user_id   = null === $user_id ? get_current_user_id() : absint( $user_id );
+
+		if ( ! $course_id || ! function_exists( 'tutor_utils' ) ) {
+			return false;
+		}
+
+		if ( tutor_utils()->has_user_course_content_access( $user_id, $course_id ) ) {
+			return false;
+		}
+
+		$enrollment_result = tutor_utils()->is_enrolled( $course_id, $user_id );
+		$enrollment_id     = 0;
+
+		if ( $enrollment_result ) {
+			if ( is_object( $enrollment_result ) && isset( $enrollment_result->ID ) ) {
+				$enrollment_id = (int) $enrollment_result->ID;
+			} elseif ( is_numeric( $enrollment_result ) ) {
+				$enrollment_id = (int) $enrollment_result;
+			}
+		}
+
+		if ( ! $enrollment_id ) {
+			return false;
+		}
+
+		$is_membership_enrollment = get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true ) ||
+			get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true );
+
+		if ( ! $is_membership_enrollment ) {
+			return false;
+		}
+
+		return true !== $this->has_course_access( $course_id, $user_id );
+	}
+
+	/**
 	 * Check if a specific level grants access to a specific course via pmpro_memberships_pages.
 	 *
 	 * This checks for course-specific levels (those without a membership model meta)

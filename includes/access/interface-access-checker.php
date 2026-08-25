@@ -35,6 +35,21 @@ interface Access_Checker_Interface {
 	public function has_course_access( $course_id, $user_id = null );
 
 	/**
+	 * Whether a membership-created enrollment should be denied at access time.
+	 *
+	 * True means deny keep-content / enrolled chrome. False means do not deny
+	 * (no row, individual purchase, current membership grants, or privileged/IA).
+	 *
+	 * @since 1.0.7
+	 *
+	 * @param int      $course_id Course post ID.
+	 * @param int|null $user_id   User ID (defaults to current user, 0 for logged-out users).
+	 *
+	 * @return bool True to deny, false otherwise.
+	 */
+	public function should_deny_membership_enrollment( $course_id, $user_id = null );
+
+	/**
 	 * Check if any full-site membership levels exist.
 	 *
 	 * @return bool True if full-site levels exist, false otherwise.

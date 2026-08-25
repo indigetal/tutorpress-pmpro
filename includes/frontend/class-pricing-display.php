@@ -106,7 +106,8 @@ class Pricing_Display {
 		add_filter( 'tutor/course/single/entry-box/is_public', array( $this, 'pmpro_pricing' ), 10, 2 );
 		add_filter( 'tutor/course/single/entry-box/fully_booked', array( $this, 'pmpro_pricing' ), 10, 2 );
 		add_action( 'tutor/course/single/content/before/all', array( $this, 'pmpro_pricing_single_course' ), 100, 2 );
-		
+		add_filter( 'tutor_course_content_access', array( $this, 'filter_course_content_access' ), 10, 2 );
+
 		// Additional pricing filters
 		add_filter( 'tutor_course/single/add-to-cart', array( $this, 'tutor_course_add_to_cart' ) );
 		add_filter( 'tutor_course_price', array( $this, 'tutor_course_price' ) );
@@ -203,8 +204,8 @@ class Pricing_Display {
 		// Check if user is enrolled in bundle via PMPro
 		$bundle_enrolled = $this->is_user_enrolled_in_bundle( $bundle_id, get_current_user_id() );
 
-		// If enrolled via PMPro, return true to show enrollment info
-		if ( $bundle_enrolled ) {
+		// Child-course metas set enrolled; do not keep when membership no longer grants the bundle.
+		if ( $bundle_enrolled && true === $this->access_checker->has_course_access( $bundle_id, get_current_user_id() ) ) {
 			return true;
 		}
 
@@ -223,6 +224,10 @@ class Pricing_Display {
 	 * @return mixed
 	 */
 	public function alter_category_wise_enroll_status( $is_enrolled ) {
+		if ( $this->access_checker->should_deny_membership_enrollment( (int) get_the_ID(), get_current_user_id() ) ) {
+			return false;
+		}
+
 		if ( $is_enrolled ) {
 			return $is_enrolled;
 		}
@@ -333,7 +338,7 @@ class Pricing_Display {
 		// For bundles, check if enrolled via PMPro (bundles don't have direct enrollment records)
 		if ( $is_bundle ) {
 			$bundle_enrolled = $this->is_user_enrolled_in_bundle( $course_id, get_current_user_id() );
-			if ( $bundle_enrolled ) {
+			if ( $bundle_enrolled && true === $this->access_checker->has_course_access( $course_id, get_current_user_id() ) ) {
 				// User is enrolled in bundle via PMPro - return "Bundle Details" button
 				// This matches Tutor's behavior for enrolled courses (shows "Continue Learning" button)
 				ob_start();
@@ -370,14 +375,13 @@ class Pricing_Display {
 				if ( $enrollment_id ) {
 					$is_pmpro_enrollment = get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true ) ||
 										   get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true );
-					
-					// If enrolled via PMPro (regular or bundle), show enrollment status
-					if ( $is_pmpro_enrollment ) {
+
+					if ( $is_pmpro_enrollment && ! $this->access_checker->should_deny_membership_enrollment( $course_id, get_current_user_id() ) ) {
 						return $html;
 					}
-					
-					// If enrolled individually (not via membership), show enrollment status
-					if ( ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id, get_current_user_id() ) ) {
+
+					// Unflagged individual-purchase keep only. Helper-deny must not fall through.
+					if ( ! $is_pmpro_enrollment && ! $this->enrollment_handler->is_enrolled_by_pmpro_membership( $course_id, get_current_user_id() ) ) {
 						return $html;
 					}
 				}
@@ -423,9 +427,8 @@ class Pricing_Display {
 			if ( $enrollment_id ) {
 				$is_pmpro_enrollment = get_post_meta( $enrollment_id, '_tutorpress_pmpro_membership_enrollment', true ) ||
 									   get_post_meta( $enrollment_id, '_tutor_pmpro_level_id', true );
-				
-				// If enrolled via PMPro (regular or bundle), show enrollment status
-				if ( $is_pmpro_enrollment ) {
+
+				if ( $is_pmpro_enrollment && ! $this->access_checker->should_deny_membership_enrollment( $course_id, get_current_user_id() ) ) {
 					return $html;
 				}
 			}
@@ -850,8 +853,9 @@ class Pricing_Display {
 		$is_enrolled        = tutor_utils()->is_enrolled( $course_id, get_current_user_id() );
 		$is_preview_enabled = tutor()->lesson_post_type === get_post_type( $content_id ) ? (bool) get_post_meta( $content_id, '_is_preview', true ) : false;
 
-		// @since v2.0.7 If user has access to the content, allow access; otherwise redirect to course page
-		if ( $has_course_access || $is_enrolled || $is_preview_enabled ) {
+		// @since v2.0.7 If user has access to the content, allow access; otherwise redirect to course page.
+		// Preview and boolean membership access still keep even when the helper would deny.
+		if ( $has_course_access || $is_preview_enabled || ( $is_enrolled && ! $this->access_checker->should_deny_membership_enrollment( $course_id, get_current_user_id() ) ) ) {
 			return;
 		}
 
@@ -859,6 +863,45 @@ class Pricing_Display {
 			wp_safe_redirect( get_permalink( $course_id ) );
 			exit;
 		}
+	}
+
+	/**
+	 * Deny Tutor course-content access for membership-created enrollments
+	 * when current membership no longer grants the course.
+	 *
+	 * Public courses and lesson preview keep the incoming $has_access even if
+	 * the helper would deny. Quiz _is_preview is not a keep.
+	 *
+	 * @since 1.0.0
+	 * @param bool  $has_access Whether Tutor already granted content access.
+	 * @param array $args       CourseModel access args.
+	 * @return bool
+	 */
+	public function filter_course_content_access( $has_access, $args ) {
+		if ( ! $has_access ) {
+			return $has_access;
+		}
+
+		if ( ! is_array( $args ) ) {
+			return $has_access;
+		}
+
+		if ( ! empty( $args['is_public'] ) ) {
+			return $has_access;
+		}
+
+		$current_post_type = isset( $args['current_post_type'] ) ? $args['current_post_type'] : '';
+		$current_post_id   = isset( $args['current_post_id'] ) ? (int) $args['current_post_id'] : 0;
+		if ( tutor()->lesson_post_type === $current_post_type && $current_post_id && (bool) get_post_meta( $current_post_id, '_is_preview', true ) ) {
+			return $has_access;
+		}
+
+		$course_id = isset( $args['course_id'] ) ? (int) $args['course_id'] : 0;
+		if ( $this->access_checker->should_deny_membership_enrollment( $course_id, get_current_user_id() ) ) {
+			return false;
+		}
+
+		return $has_access;
 	}
 
 	/**
@@ -884,8 +927,9 @@ class Pricing_Display {
 			return $html;
 		}
 
-		$is_enrolled = tutor_utils()->is_enrolled();
-		
+		$is_enrolled      = tutor_utils()->is_enrolled();
+		$bundle_enrolled  = false;
+
 		// Phase 4: For bundles, check if enrolled via PMPro membership
 		// Note: tutor_alter_enroll_status handles the entry box template, but pmpro_pricing filters
 		// need to check enrollment directly since they run in different contexts
@@ -905,11 +949,15 @@ class Pricing_Display {
 
 		/**
 		 * If current user has course access then no need to show price
-		 * plan.
+		 * plan. Membership-created enrollments without current access do not keep.
 		 *
 		 * @since v2.0.7
 		 */
-		if ( $is_enrolled || $has_course_access ) {
+		if ( $has_course_access ) {
+			return $html;
+		}
+
+		if ( $is_enrolled && ! ( $is_bundle && $bundle_enrolled ) && ! $this->access_checker->should_deny_membership_enrollment( $course_id, get_current_user_id() ) ) {
 			return $html;
 		}
 
