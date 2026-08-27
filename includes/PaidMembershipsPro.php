@@ -66,6 +66,14 @@ class PaidMembershipsPro {
     private $pmpro_orders_integration;
 
     /**
+     * Enrolled content access service instance.
+     *
+     * @since 1.0.7
+     * @var \TUTORPRESS_PMPRO\Frontend\Enrolled_Content_Access
+     */
+    private $enrolled_content_access;
+
+    /**
      * Level settings service instance.
      *
      * @since 1.0.0
@@ -121,6 +129,7 @@ class PaidMembershipsPro {
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pricing-display.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrollment-ui.php';
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-pmpro-orders-integration.php';
+        require_once \TUTORPRESS_PMPRO_DIR . 'includes/frontend/class-enrolled-content-access.php';
         
         // Load service container
         require_once \TUTORPRESS_PMPRO_DIR . 'includes/class-service-container.php';
@@ -173,6 +182,11 @@ class PaidMembershipsPro {
 
 			// Membership-Only Mode filter
 			$this->wire_membership_only_mode_filter();
+
+			$this->enrolled_content_access = new \TUTORPRESS_PMPRO\Frontend\Enrolled_Content_Access(
+				$this->access_checker
+			);
+			$this->enrolled_content_access->register_hooks();
         }
     }
 
