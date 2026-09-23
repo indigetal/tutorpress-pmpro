@@ -175,7 +175,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			]
 		);
 
-		// Sort subscription plans for a course/bundle (no longer stores order in post meta)
+		// Sort subscription plans. Display order is stored in _tutorpress_pmpro_levels.
 		register_rest_route(
 			$this->namespace,
 			'/' . $this->rest_base . '/sort',
@@ -198,9 +198,73 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			]
 		);
 
+		$this->register_editor_sort_route( '/courses/(?P<course_id>[\d]+)/subscriptions/sort', 'course_id', [ $this, 'sort_editor_course_plans' ] );
+		$this->register_editor_sort_route( '/bundles/(?P<bundle_id>[\d]+)/subscriptions/sort', 'bundle_id', [ $this, 'sort_editor_bundle_plans' ] );
+
 		} catch ( Exception $e ) {
 			$this->log( 'TutorPress PMPro Subscriptions Controller: Failed to register routes - ' . $e->getMessage() );
 		}
+	}
+
+	/**
+	 * Register an editor sort route. Permission reads only $id_arg.
+	 *
+	 * @param string   $route    Route pattern.
+	 * @param string   $id_arg   Post id argument name.
+	 * @param callable $callback Route callback.
+	 * @return void
+	 */
+	private function register_editor_sort_route( $route, $id_arg, $callback ) {
+		register_rest_route(
+			$this->namespace,
+			$route,
+			[
+				[
+					'methods'             => WP_REST_Server::EDITABLE,
+					'callback'            => $callback,
+					'permission_callback' => function( $request ) use ( $id_arg ) {
+						$id = (int) $request->get_param( $id_arg );
+						if ( $id && current_user_can( 'edit_post', $id ) ) {
+							return true;
+						}
+						return $this->check_permission( $request );
+					},
+					'args'                => [
+						$id_arg      => [ 'required' => true, 'type' => 'integer', 'sanitize_callback' => 'absint', 'description' => __( 'The ID of the course or bundle the plans belong to.', 'tutorpress-pmpro' ) ],
+						'plan_order' => [
+							'required'    => true,
+							'type'        => 'array',
+							'items'       => [ 'type' => 'integer' ],
+							'description' => __( 'Array of plan IDs in the desired order.', 'tutorpress-pmpro' ),
+						],
+					],
+				],
+			]
+		);
+	}
+
+	/**
+	 * Map a course editor sort onto the shared sort callback.
+	 *
+	 * @param WP_REST_Request $request Request with course_id and plan_order.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function sort_editor_course_plans( $request ) {
+		$request->set_param( 'object_id', $request->get_param( 'course_id' ) );
+		$request->set_param( 'ordered_ids', $request->get_param( 'plan_order' ) );
+		return $this->sort_subscription_plans( $request );
+	}
+
+	/**
+	 * Map a bundle editor sort onto the shared sort callback.
+	 *
+	 * @param WP_REST_Request $request Request with bundle_id and plan_order.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function sort_editor_bundle_plans( $request ) {
+		$request->set_param( 'object_id', $request->get_param( 'bundle_id' ) );
+		$request->set_param( 'ordered_ids', $request->get_param( 'plan_order' ) );
+		return $this->sort_subscription_plans( $request );
 	}
 
 	/**
@@ -877,7 +941,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	}
 
 	/**
-	 * Sort subscription plans for a course/bundle (no longer stores order in post meta)
+	 * Sort subscription plans. Display order is stored in _tutorpress_pmpro_levels.
 	 *
 	 * @param WP_REST_Request $request
 	 * @return WP_REST_Response|WP_Error
@@ -898,6 +962,22 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		$read = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_object_state( $object_id );
 		if ( 'ok' !== $read['result'] ) {
 			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to reorder subscription plans.', 'tutorpress-pmpro' ), $read['result'], 500 );
+		}
+
+		$stored = get_post_meta( $object_id, '_tutorpress_pmpro_levels', true );
+		if ( ! is_array( $stored ) ) {
+			$stored = array();
+		}
+		$merged = self::merge_display_order( $stored, $ordered_ids );
+		if ( array_map( 'intval', array_values( $stored ) ) !== $merged ) {
+			$written = update_post_meta( $object_id, '_tutorpress_pmpro_levels', $merged );
+			if ( ! $written ) {
+				$reread = get_post_meta( $object_id, '_tutorpress_pmpro_levels', true );
+				$reread = array_map( 'intval', array_values( is_array( $reread ) ? $reread : array() ) );
+				if ( $reread !== $merged ) {
+					return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to reorder subscription plans.', 'tutorpress-pmpro' ), 'order_persist_failed', 500 );
+				}
+			}
 		}
 
 		// Best-effort: ensure reverse meta (use appropriate meta key based on post type)
@@ -1002,6 +1082,38 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 			error_log( $message );
 		}
+	}
+
+	/**
+	 * Occurrence-counted merge of stored display ids and sanitized submitted ids.
+	 *
+	 * @param array $stored    Stored level ids. Nonpositive values stay in place.
+	 * @param array $submitted Sanitized submitted ids. Unmatched ids are appended.
+	 * @return array<int, int> Merged ids.
+	 */
+	private static function merge_display_order( array $stored, array $submitted ): array {
+		$stored    = array_map( 'intval', array_values( $stored ) );
+		$submitted = array_map( 'intval', array_values( $submitted ) );
+		$open      = array();
+		foreach ( $stored as $index => $id ) {
+			$open[ (string) $id ][] = $index;
+		}
+		$marked = $matched = $unmatched = array();
+		foreach ( $submitted as $id ) {
+			$key = (string) $id;
+			if ( ! empty( $open[ $key ] ) ) {
+				$marked[ array_shift( $open[ $key ] ) ] = true;
+				$matched[]                              = $id;
+			} else {
+				$unmatched[] = $id;
+			}
+		}
+		$merged = array();
+		$cursor = 0;
+		foreach ( $stored as $index => $id ) {
+			$merged[] = isset( $marked[ $index ] ) ? $matched[ $cursor++ ] : $id;
+		}
+		return array_merge( $merged, $unmatched );
 	}
 
 }
