@@ -60,6 +60,7 @@ class Sale_Price_Handler {
 	public function register_hooks() {
 		// PMPro Critical Filter Hooks for Dynamic Pricing (Zero-Delay Architecture)
 		add_filter( 'pmpro_checkout_level', array( $this, 'filter_checkout_level_sale_price' ), 10, 1 );
+		add_filter( 'pmpro_checkout_level', array( $this, 'filter_checkout_level_admission' ), PHP_INT_MAX, 1 );
 		add_filter( 'pmpro_level_cost_text', array( $this, 'filter_level_cost_text_sale_price' ), 999, 4 );
 		add_filter( 'pmpro_email_data', array( $this, 'filter_email_data_sale_price' ), 10, 2 );
 		add_action( 'pmpro_invoice_bullets_bottom', array( $this, 'filter_invoice_sale_note' ), 10, 1 );
@@ -204,6 +205,36 @@ class Sale_Price_Handler {
 					$active_price['price'],
 					$active_price['regular_price']
 				) );
+			}
+		}
+
+		return $level;
+	}
+
+	/**
+	 * Block checkout admission for a retired level after sale and discount filters.
+	 *
+	 * A non-ok relationship lookup, including invalid or unreadable state on a
+	 * candidate for this level, returns null. An unlinked pair does not.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param object|null $level Checkout level, or null when PMPro already rejected it.
+	 * @return object|null Unchanged level, or null when admission is blocked.
+	 */
+	public function filter_checkout_level_admission( $level ) {
+		if ( ! is_object( $level ) || empty( $level->id ) ) {
+			return $level;
+		}
+
+		$read = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_level_matches( absint( $level->id ) );
+		if ( 'ok' !== $read['result'] ) {
+			return null;
+		}
+
+		foreach ( $read['matches'] as $pair ) {
+			if ( \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::STATE_RETIRED === $pair['state'] ) {
+				return null;
 			}
 		}
 

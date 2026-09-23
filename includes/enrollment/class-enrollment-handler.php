@@ -745,6 +745,59 @@ class Enrollment_Handler {
 	}
 
 	/**
+	 * Whether an exact object/level pair is retired or unlinked.
+	 *
+	 * Drop a pair when the read is invalid_state, or when the read is ok, the
+	 * pair is an array, and its state is retired or unlinked. An ok null pair
+	 * is legacy no-state and stays mapped. Any other non-ok read stays mapped.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param int $object_id Course or bundle post ID.
+	 * @param int $level_id  PMPro membership level ID.
+	 * @return bool True when enrollment mapping must skip this pair.
+	 */
+	private function object_pair_is_marked( $object_id, $level_id ) {
+		$read = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_pair( $object_id, $level_id );
+		if ( 'invalid_state' === $read['result'] ) {
+			return true;
+		}
+		if ( 'ok' !== $read['result'] || ! is_array( $read['pair'] ?? null ) ) {
+			return false;
+		}
+		return \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::STATE_RETIRED === $read['pair']['state']
+			|| \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::STATE_UNLINKED === $read['pair']['state'];
+	}
+
+	/**
+	 * Course IDs from object/level rows that are not retired or unlinked.
+	 *
+	 * Identical object/level pairs are ignored after the first row.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param array<int, object>|null $rows Rows with object_id and level_id properties.
+	 * @return int[] Course IDs to keep.
+	 */
+	private function unmarked_course_ids_from_pairs( $rows ) {
+		$ids  = array();
+		$seen = array();
+		if ( ! is_array( $rows ) ) {
+			return $ids;
+		}
+		foreach ( $rows as $row ) {
+			$object_id = isset( $row->object_id ) ? (int) $row->object_id : 0;
+			$level_id  = isset( $row->level_id ) ? (int) $row->level_id : 0;
+			if ( $object_id <= 0 || $level_id <= 0 || isset( $seen[ $object_id . ':' . $level_id ] ) || $this->object_pair_is_marked( $object_id, $level_id ) ) {
+				continue;
+			}
+			$seen[ $object_id . ':' . $level_id ] = true;
+			$ids[]                                = $object_id;
+		}
+		return $ids;
+	}
+
+	/**
 	 * Get all courses mapped to a set of PMPro membership levels.
 	 *
 	 * Uses lookup strategies:
@@ -789,25 +842,24 @@ class Enrollment_Handler {
 			$post_type   = tutor()->course_post_type;
 			$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
 			$sql = "
-				SELECT mp.page_id
+				SELECT mp.page_id AS object_id, mp.membership_id AS level_id
 				FROM {$wpdb->pmpro_memberships_pages} mp
 				LEFT JOIN {$wpdb->posts} p ON mp.page_id = p.ID
 				WHERE mp.membership_id IN ( {$placeholders} )
 				AND p.post_type = %s
 				AND p.post_status = 'publish'
-				GROUP BY mp.page_id
 			";
 			$params = array_merge( array( $sql ), $level_ids, array( $post_type ) );
 			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
-			$course_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
-			$course_ids = is_array( $course_ids ) ? array_map( 'intval', $course_ids ) : array();
+			$page_rows  = $wpdb->get_results( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			$course_ids = array_merge( $course_ids, $this->unmarked_course_ids_from_pairs( $page_rows ) );
 		}
 
 		// Secondary: Reverse meta lookup (tutorpress_course_id) for course-specific levels
 		if ( isset( $wpdb->pmpro_membership_levelmeta ) ) {
 			$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
 			$sql = "
-				SELECT DISTINCT CAST(meta_value AS UNSIGNED) as course_id
+				SELECT DISTINCT CAST(meta_value AS UNSIGNED) AS object_id, pmpro_membership_level_id AS level_id
 				FROM {$wpdb->pmpro_membership_levelmeta}
 				WHERE meta_key = 'tutorpress_course_id'
 				AND pmpro_membership_level_id IN ( {$placeholders} )
@@ -815,10 +867,10 @@ class Enrollment_Handler {
 			";
 			$params = array_merge( array( $sql ), $level_ids );
 			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
-			$reverse_course_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			$reverse_rows       = $wpdb->get_results( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			$reverse_course_ids = $this->unmarked_course_ids_from_pairs( $reverse_rows );
 			if ( is_array( $reverse_course_ids ) && ! empty( $reverse_course_ids ) ) {
 				// Verify these are valid published courses
-				$reverse_course_ids = array_map( 'intval', $reverse_course_ids );
 				$valid_courses = get_posts( array(
 					'post_type'   => tutor()->course_post_type,
 					'post_status' => 'publish',
@@ -835,7 +887,7 @@ class Enrollment_Handler {
 		if ( $include_bundle_courses && isset( $wpdb->pmpro_membership_levelmeta ) && class_exists( 'TutorPro\CourseBundle\Models\BundleModel' ) ) {
 			$placeholders = implode( ', ', array_fill( 0, count( $level_ids ), '%d' ) );
 			$sql = "
-				SELECT DISTINCT CAST(meta_value AS UNSIGNED) as bundle_id
+				SELECT DISTINCT CAST(meta_value AS UNSIGNED) AS object_id, pmpro_membership_level_id AS level_id
 				FROM {$wpdb->pmpro_membership_levelmeta}
 				WHERE meta_key = 'tutorpress_bundle_id'
 				AND pmpro_membership_level_id IN ( {$placeholders} )
@@ -843,7 +895,8 @@ class Enrollment_Handler {
 			";
 			$params = array_merge( array( $sql ), $level_ids );
 			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders handled via call_user_func_array
-			$bundle_ids = $wpdb->get_col( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			$bundle_rows = $wpdb->get_results( call_user_func_array( array( $wpdb, 'prepare' ), $params ) );
+			$bundle_ids  = $this->unmarked_course_ids_from_pairs( $bundle_rows );
 			
 			if ( is_array( $bundle_ids ) && ! empty( $bundle_ids ) ) {
 				foreach ( $bundle_ids as $bundle_id ) {

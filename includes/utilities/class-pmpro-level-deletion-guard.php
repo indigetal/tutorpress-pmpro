@@ -87,50 +87,211 @@ class PMPro_Level_Deletion_Guard {
 		return array( 'complete' => true, 'protected' => $protected > 0, 'total' => (int) $total, 'residual' => $residual );
 	}
 
+	/**
+	 * Classify whether a level's membership, subscription, and order
+	 * inventories are incomplete, confirmed protected, or unprotected.
+	 *
+	 * Walks the shipped inventory helpers in evaluate order. An incomplete
+	 * inventory returns incomplete before a later protected inventory can
+	 * be treated as confirmed protection. Non-positive IDs use those helpers
+	 * and are not queried a second way.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param int $level_id PMPro membership level ID.
+	 * @return string One of incomplete, protected, or unprotected.
+	 */
+	public static function classify_protection( $level_id ) {
+		$level_id = (int) $level_id;
+		foreach (
+			array(
+				self::membership_inventory( $level_id ),
+				self::subscription_inventory( $level_id ),
+				self::order_inventory( $level_id ),
+			) as $inv
+		) {
+			if ( empty( $inv['complete'] ) ) {
+				return 'incomplete';
+			}
+			if ( ! empty( $inv['protected'] ) ) {
+				return 'protected';
+			}
+		}
+
+		return 'unprotected';
+	}
+
+	/**
+	 * Classify relationship topology for a requesting course or bundle.
+	 *
+	 * Uses the shipped levelmeta, page, listing, and group evidence without
+	 * consulting membership, subscription, or order inventories. Invalid
+	 * IDs, missing tables, failed reads, foreign reverse evidence, and
+	 * category or full-site models fail closed as ineligible.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param int    $level_id    PMPro membership level ID.
+	 * @param int    $object_id   Course or bundle post ID.
+	 * @param string $object_type courses or course-bundle.
+	 * @return string One of allowed, shared_unlink, ownership_conflict, or ineligible.
+	 */
+	public static function classify_relationship( $level_id, $object_id, $object_type ) {
+		global $wpdb;
+		$level_id  = (int) $level_id;
+		$object_id = (int) $object_id;
+		if (
+			$level_id <= 0
+			|| $object_id <= 0
+			|| ! in_array( $object_type, array( 'courses', 'course-bundle' ), true )
+			|| empty( $wpdb->pmpro_membership_levelmeta )
+			|| empty( $wpdb->pmpro_memberships_pages )
+			|| empty( $wpdb->pmpro_membership_levels_groups )
+			|| empty( $wpdb->pmpro_groups )
+		) {
+			return 'ineligible';
+		}
+
+		$meta = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT meta_key, meta_value FROM `{$wpdb->pmpro_membership_levelmeta}` WHERE pmpro_membership_level_id = %d AND meta_key IN ('tutorpress_managed','tutorpress_course_id','tutorpress_bundle_id','TUTORPRESS_PMPRO_membership_model')",
+				$level_id
+			),
+			OBJECT_K
+		);
+		$pages = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT page_id FROM `{$wpdb->pmpro_memberships_pages}` WHERE membership_id = %d",
+				$level_id
+			)
+		);
+		$pm = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT post_id, meta_value FROM `{$wpdb->postmeta}` WHERE meta_key = %s",
+				'_tutorpress_pmpro_levels'
+			),
+			ARRAY_A
+		);
+		$gids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT `group` FROM `{$wpdb->pmpro_membership_levels_groups}` WHERE `level` = %d",
+				$level_id
+			)
+		);
+		$grows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT post_id, meta_value FROM `{$wpdb->postmeta}` WHERE meta_key = %s",
+				'_tutorpress_pmpro_group_id'
+			),
+			ARRAY_A
+		);
+		if (
+			false === $meta
+			|| ! is_array( $meta )
+			|| false === $pages
+			|| ! is_array( $pages )
+			|| false === $pm
+			|| ! is_array( $pm )
+			|| false === $gids
+			|| ! is_array( $gids )
+			|| false === $grows
+			|| ! is_array( $grows )
+			|| '' !== $wpdb->last_error
+		) {
+			return 'ineligible';
+		}
+
+		$managed = isset( $meta['tutorpress_managed'] ) ? (string) $meta['tutorpress_managed']->meta_value : '';
+		$crev    = isset( $meta['tutorpress_course_id'] ) ? (int) $meta['tutorpress_course_id']->meta_value : 0;
+		$brev    = isset( $meta['tutorpress_bundle_id'] ) ? (int) $meta['tutorpress_bundle_id']->meta_value : 0;
+		$model   = isset( $meta['TUTORPRESS_PMPRO_membership_model'] ) ? (string) $meta['TUTORPRESS_PMPRO_membership_model']->meta_value : '';
+		$pages   = array_values( array_unique( array_map( 'intval', $pages ) ) );
+		$listed  = array();
+		foreach ( $pm as $row ) {
+			$ids = maybe_unserialize( $row['meta_value'] );
+			if ( is_array( $ids ) && in_array( $level_id, array_map( 'intval', $ids ), true ) ) {
+				$listed[] = (int) $row['post_id'];
+			}
+		}
+		$own       = ( 'courses' === $object_type ) ? $crev : $brev;
+		$gids      = array_values( array_unique( array_map( 'intval', $gids ) ) );
+		$gothers   = array();
+		$rg        = 0;
+		$req_group = false;
+		foreach ( $grows as $row ) {
+			$pid = (int) $row['post_id'];
+			$gid = (int) $row['meta_value'];
+			if ( $pid === $object_id ) {
+				$rg = $gid;
+			} elseif ( $gid > 0 && in_array( $gid, $gids, true ) ) {
+				$gothers[] = $pid;
+			}
+		}
+		if ( $rg > 0 && in_array( $rg, $gids, true ) ) {
+			$ex = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT id FROM `{$wpdb->pmpro_groups}` WHERE id = %d",
+					$rg
+				)
+			);
+			if ( false === $ex || '' !== $wpdb->last_error ) {
+				return 'ineligible';
+			}
+			$req_group = ( (int) $ex === $rg );
+		}
+		if (
+			( 'courses' === $object_type ? $brev : $crev ) > 0
+			|| ( in_array( $object_id, $listed, true ) && $own > 0 && $own !== $object_id )
+		) {
+			return 'ownership_conflict';
+		}
+
+		$others = array_diff(
+			array_filter(
+				array_merge(
+					$pages,
+					$listed,
+					$crev > 0 ? array( $crev ) : array(),
+					$brev > 0 ? array( $brev ) : array(),
+					$gothers
+				)
+			),
+			array( $object_id, 0 )
+		);
+		if (
+			(
+				in_array( $object_id, $pages, true )
+				|| in_array( $object_id, $listed, true )
+				|| $own === $object_id
+				|| $req_group
+			)
+			&& $others
+		) {
+			return 'shared_unlink';
+		}
+
+		$ok = (
+			'1' === $managed
+			&& $own === $object_id
+			&& (
+				( 'courses' === $object_type && in_array( $object_id, $pages, true ) )
+				|| ( 'course-bundle' === $object_type && $req_group )
+			)
+		);
+		return ( $ok && ! in_array( $model, array( 'category_wise_membership', 'full_website_membership' ), true ) )
+			? 'allowed'
+			: 'ineligible';
+	}
+
 	public static function evaluate( $level_id, $object_id, $object_type ) {
 		global $wpdb;
 		$level_id = (int) $level_id; $object_id = (int) $object_id;
 		if ( $level_id <= 0 || $object_id <= 0 || ! in_array( $object_type, array( 'courses', 'course-bundle' ), true ) || empty( $wpdb->pmpro_membership_levelmeta ) || empty( $wpdb->pmpro_memberships_pages ) || empty( $wpdb->pmpro_membership_levels_groups ) || empty( $wpdb->pmpro_groups ) ) {
 			return 'ineligible';
 		}
-		foreach ( array( self::membership_inventory( $level_id ), self::subscription_inventory( $level_id ), self::order_inventory( $level_id ) ) as $inv ) {
-			if ( empty( $inv['complete'] ) || ! empty( $inv['protected'] ) ) {
-				return 'protected';
-			}
+		if ( 'unprotected' !== self::classify_protection( $level_id ) ) {
+			return 'protected';
 		}
-		$meta = $wpdb->get_results( $wpdb->prepare( "SELECT meta_key, meta_value FROM `{$wpdb->pmpro_membership_levelmeta}` WHERE pmpro_membership_level_id = %d AND meta_key IN ('tutorpress_managed','tutorpress_course_id','tutorpress_bundle_id','TUTORPRESS_PMPRO_membership_model')", $level_id ), OBJECT_K );
-		$pages = $wpdb->get_col( $wpdb->prepare( "SELECT page_id FROM `{$wpdb->pmpro_memberships_pages}` WHERE membership_id = %d", $level_id ) );
-		$pm = $wpdb->get_results( $wpdb->prepare( "SELECT post_id, meta_value FROM `{$wpdb->postmeta}` WHERE meta_key = %s", '_tutorpress_pmpro_levels' ), ARRAY_A );
-		$gids = $wpdb->get_col( $wpdb->prepare( "SELECT `group` FROM `{$wpdb->pmpro_membership_levels_groups}` WHERE `level` = %d", $level_id ) );
-		$grows = $wpdb->get_results( $wpdb->prepare( "SELECT post_id, meta_value FROM `{$wpdb->postmeta}` WHERE meta_key = %s", '_tutorpress_pmpro_group_id' ), ARRAY_A );
-		if ( false === $meta || ! is_array( $meta ) || false === $pages || ! is_array( $pages ) || false === $pm || ! is_array( $pm ) || false === $gids || ! is_array( $gids ) || false === $grows || ! is_array( $grows ) || '' !== $wpdb->last_error ) {
-			return 'ineligible';
-		}
-		$managed = isset( $meta['tutorpress_managed'] ) ? (string) $meta['tutorpress_managed']->meta_value : '';
-		$crev = isset( $meta['tutorpress_course_id'] ) ? (int) $meta['tutorpress_course_id']->meta_value : 0;
-		$brev = isset( $meta['tutorpress_bundle_id'] ) ? (int) $meta['tutorpress_bundle_id']->meta_value : 0;
-		$model = isset( $meta['TUTORPRESS_PMPRO_membership_model'] ) ? (string) $meta['TUTORPRESS_PMPRO_membership_model']->meta_value : '';
-		$pages = array_values( array_unique( array_map( 'intval', $pages ) ) );
-		$listed = array(); foreach ( $pm as $row ) { $ids = maybe_unserialize( $row['meta_value'] ); if ( is_array( $ids ) && in_array( $level_id, array_map( 'intval', $ids ), true ) ) { $listed[] = (int) $row['post_id']; } }
-		$own = ( 'courses' === $object_type ) ? $crev : $brev;
-		$gids = array_values( array_unique( array_map( 'intval', $gids ) ) );
-		$gothers = array(); $rg = 0; $req_group = false;
-		foreach ( $grows as $row ) { $pid = (int) $row['post_id']; $gid = (int) $row['meta_value']; if ( $pid === $object_id ) { $rg = $gid; } elseif ( $gid > 0 && in_array( $gid, $gids, true ) ) { $gothers[] = $pid; } }
-		if ( $rg > 0 && in_array( $rg, $gids, true ) ) {
-			$ex = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM `{$wpdb->pmpro_groups}` WHERE id = %d", $rg ) );
-			if ( false === $ex || '' !== $wpdb->last_error ) {
-				return 'ineligible';
-			}
-			$req_group = ( (int) $ex === $rg );
-		}
-		if ( ( 'courses' === $object_type ? $brev : $crev ) > 0 || ( in_array( $object_id, $listed, true ) && $own > 0 && $own !== $object_id ) ) {
-			return 'ownership_conflict';
-		}
-		$others = array_diff( array_filter( array_merge( $pages, $listed, $crev > 0 ? array( $crev ) : array(), $brev > 0 ? array( $brev ) : array(), $gothers ) ), array( $object_id, 0 ) );
-		if ( ( in_array( $object_id, $pages, true ) || in_array( $object_id, $listed, true ) || $own === $object_id || $req_group ) && $others ) {
-			return 'shared_unlink';
-		}
-		$ok = ( '1' === $managed && $own === $object_id && ( ( 'courses' === $object_type && in_array( $object_id, $pages, true ) ) || ( 'course-bundle' === $object_type && $req_group ) ) );
-		return ( $ok && ! in_array( $model, array( 'category_wise_membership', 'full_website_membership' ), true ) ) ? 'allowed' : 'ineligible';
+		return self::classify_relationship( $level_id, $object_id, $object_type );
 	}
 }

@@ -52,5 +52,99 @@ try {
 	$f = $lid + 4; $mk( $f ); $GLOBALS['tutorpress_pmpro_lds_unlock'] = '0'; $pn = 0; add_action( 'tutorpress_pmpro_membership_level_deleted', function() use ( &$pn ) { $pn++; } ); tutorpress_pmpro_lds_assert( 'committed_with_warning' === $c::delete_level( $f, $a, 'courses' ) && 0 === $pn && ! $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $f ) ), 'dl-relwarn' ); unset( $GLOBALS['tutorpress_pmpro_lds_unlock'] );
 	$g = $lid + 5; $mk( $g ); add_action( 'tutorpress_pmpro_membership_level_deleted', function() { throw new RuntimeException( 'x' ); } ); tutorpress_pmpro_lds_assert( 'ok' === $c::delete_level( $g, $a, 'courses' ), 'dl-hookthrow' );
 	$h = $lid + 6; $mk( $h ); do_action( 'pmpro_delete_membership_level', $h ); tutorpress_pmpro_lds_assert( 'free' === get_post_meta( $a, '_tutor_course_price_type', true ) && '' === get_post_meta( $a, '_tutorpress_pmpro_levels', true ) && false === $c::deletion_listener_suppressed(), 'dl-admin' );
+	$s  = '\\TUTORPRESS_PMPRO\\PMPro_Level_Removal_State';
+	$put = function( $levels ) use ( $a, $s ) {
+		update_post_meta(
+			$a,
+			$s::META_KEY,
+			array(
+				'version'             => 1,
+				'levels'              => $levels,
+				'blocked_kinds'       => array( 'one_time', 'recurring' ),
+				'removed_restriction' => true,
+			)
+		);
+		wp_cache_delete( $a, 'post_meta' );
+		$s::invalidate_object( $a );
+	};
+	$p = $lid + 7;
+	$q = $lid + 8;
+	$r = $lid + 9;
+	$mk( $p );
+	$put(
+		array(
+			$p => array(
+				'state' => 'unlinked',
+				'kind'  => 'one_time',
+			),
+			$q => array(
+				'state' => 'retired',
+				'kind'  => 'recurring',
+			),
+		)
+	);
+	$GLOBALS['tutorpress_pmpro_lds_reg']['locks'][] = $s::object_lock_name( $a );
+	$merged = null;
+	$hook   = function() use ( $s, $a, $r, &$merged ) {
+		$merged = $s::merge_pair( $a, $r, $s::STATE_RETIRED, $s::KIND_ONE_TIME );
+	};
+	add_action( 'pmpro_delete_membership_level', $hook, 20 );
+	$kept = $c::delete_level( $p, $a, 'courses' );
+	remove_action( 'pmpro_delete_membership_level', $hook, 20 );
+	$read = $s::get_object_state( $a );
+	tutorpress_pmpro_lds_assert( 'ok' === ( $merged['result'] ?? '' ) && 'ok' === $kept && null === $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $p ) ) && false === $c::session_in_transaction(), '14b-commit' );
+	tutorpress_pmpro_lds_assert( 'ok' === $read['result'] && 1 === $read['payload']['version'] && ! isset( $read['payload']['levels'][ $p ] ) && array( 'state' => 'retired', 'kind' => 'recurring' ) === $read['payload']['levels'][ $q ] && array( 'state' => 'retired', 'kind' => 'one_time' ) === $read['payload']['levels'][ $r ] && array( 'one_time', 'recurring' ) === $read['payload']['blocked_kinds'] && true === $read['payload']['removed_restriction'], '14b-tombstone' );
+	$u = $lid + 10;
+	$mk( $u );
+	$put(
+		array(
+			$u => array(
+				'state' => 'unlinked',
+				'kind'  => 'one_time',
+			),
+		)
+	);
+	$dup = function() use ( $wpdb, $a, $s ) {
+		$wpdb->insert(
+			$wpdb->postmeta,
+			array(
+				'post_id'    => $a,
+				'meta_key'   => $s::META_KEY,
+				'meta_value' => 'x',
+			),
+			array( '%d', '%s', '%s' )
+		);
+	};
+	add_action( 'pmpro_delete_membership_level', $dup, 20 );
+	$bad = $c::delete_level( $u, $a, 'courses' );
+	remove_action( 'pmpro_delete_membership_level', $dup, 20 );
+	$s::invalidate_object( $a );
+	wp_cache_delete( $a, 'post_meta' );
+	$again = $s::get_object_state( $a );
+	$rows  = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s", $a, $s::META_KEY ) );
+	tutorpress_pmpro_lds_assert( 'invalid_state' === $bad && $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $u ) ) && 1 === $rows && 'ok' === $again['result'] && array( 'state' => 'unlinked', 'kind' => 'one_time' ) === $again['payload']['levels'][ $u ] && true === $again['payload']['removed_restriction'] && false === $c::session_in_transaction(), '14b-invalid' );
+	$t = $lid + 11;
+	$mk( $t );
+	$put(
+		array(
+			$t => array(
+				'state' => 'unlinked',
+				'kind'  => 'one_time',
+			),
+		)
+	);
+	$qf = function( $sql ) {
+		if ( is_string( $sql ) && false !== strpos( $sql, '_tutorpress_pmpro_level_removal_state' ) && 0 === stripos( ltrim( $sql ), 'UPDATE' ) ) {
+			return 'SELECT tp14b_cleanup_fail';
+		}
+		return $sql;
+	};
+	add_filter( 'query', $qf );
+	$cf = $c::delete_level( $t, $a, 'courses' );
+	remove_filter( 'query', $qf );
+	$s::invalidate_object( $a );
+	wp_cache_delete( $a, 'post_meta' );
+	$left = $s::get_object_state( $a );
+	tutorpress_pmpro_lds_assert( 'state_read_error' === $cf && $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $t ) ) && 'ok' === $left['result'] && array( 'state' => 'unlinked', 'kind' => 'one_time' ) === $left['payload']['levels'][ $t ] && array( 'one_time', 'recurring' ) === $left['payload']['blocked_kinds'] && true === $left['payload']['removed_restriction'] && false === $c::session_in_transaction(), '14b-cleanup' );
 	$GLOBALS['tutorpress_pmpro_lds_reg']['wpdb']['pmpro_membership_levels'] = $wpdb->pmpro_membership_levels; $wpdb->pmpro_membership_levels = 'tp_lds_missing'; tutorpress_pmpro_lds_assert( 'infrastructure' === $c::preflight( $e, $a, 'courses' ), 'infra' ); tutorpress_pmpro_lds_pass( 'preflight contract' );
-} catch ( Throwable $e ) { exit( 1 ); } finally { global $wpdb; $c = '\\TUTORPRESS_PMPRO\\PMPro_Level_Deletion_Coordinator'; $c::disarm_shutdown_guard(); $c::restore_deletion_listener(); $wpdb->query( 'ROLLBACK' ); unset( $GLOBALS['tutorpress_pmpro_lds_lock'], $GLOBALS['tutorpress_pmpro_lds_unlock'], $GLOBALS['tutorpress_pmpro_lds_in_txn'], $GLOBALS['tutorpress_pmpro_lds_txn'], $GLOBALS['tutorpress_pmpro_lds_cache_false'] ); $wpdb->query( 'DROP TABLE IF EXISTS `' . str_replace( '`', '', $wpdb->prefix . 'tp_lds_myisam_' . $lid ) . '`' ); foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; } $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_users} WHERE membership_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->postmeta} WHERE post_id IN (%d,%d) AND meta_key = %s", $lid + 2, $lid + 3, '_tutorpress_pmpro_levels' ) ); foreach ( array( $lid + 4, $lid + 5, $lid + 6 ) as $x ) { $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $x ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d", $x ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $x ) ); } tutorpress_pmpro_lds_cleanup(); }
+} catch ( Throwable $e ) { exit( 1 ); } finally { global $wpdb; $c = '\\TUTORPRESS_PMPRO\\PMPro_Level_Deletion_Coordinator'; $c::disarm_shutdown_guard(); $c::restore_deletion_listener(); $wpdb->query( 'ROLLBACK' ); unset( $GLOBALS['tutorpress_pmpro_lds_lock'], $GLOBALS['tutorpress_pmpro_lds_unlock'], $GLOBALS['tutorpress_pmpro_lds_in_txn'], $GLOBALS['tutorpress_pmpro_lds_txn'], $GLOBALS['tutorpress_pmpro_lds_cache_false'] ); $wpdb->query( 'DROP TABLE IF EXISTS `' . str_replace( '`', '', $wpdb->prefix . 'tp_lds_myisam_' . $lid ) . '`' ); foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; } $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_users} WHERE membership_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->postmeta} WHERE post_id IN (%d,%d) AND meta_key = %s", $lid + 2, $lid + 3, '_tutorpress_pmpro_levels' ) ); foreach ( array( $lid + 4, $lid + 5, $lid + 6, $lid + 7, $lid + 10, $lid + 11 ) as $x ) { $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $x ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d", $x ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $x ) ); } tutorpress_pmpro_lds_cleanup(); }

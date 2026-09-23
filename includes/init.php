@@ -162,6 +162,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 		spl_autoload_register( array( $this, 'loader' ) );
 		require_once $this->path . 'includes/utilities/class-pmpro-level-deletion-guard.php';
 		require_once $this->path . 'includes/utilities/class-pmpro-level-deletion-coordinator.php';
+		require_once $this->path . 'includes/utilities/class-pmpro-level-removal-state.php';
+		require_once $this->path . 'includes/utilities/class-pmpro-level-removal-coordinator.php';
 		$this->paid_memberships_pro = new PaidMembershipsPro();
 
 
@@ -776,6 +778,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Update allow_signups for each level
 		if ( isset( $wpdb->pmpro_membership_levels ) ) {
 			foreach ( $level_ids as $lid ) {
+				if ( 1 === $value ) {
+					$removal = PMPro_Level_Removal_State::get_pair( $post_id, $lid );
+					if ( 'ok' === $removal['result'] && is_array( $removal['pair'] ) && PMPro_Level_Removal_State::STATE_RETIRED === $removal['pair']['state'] ) {
+						continue;
+					}
+				}
 				$wpdb->update(
 					$wpdb->pmpro_membership_levels,
 					array( 'allow_signups' => $value ),
@@ -1340,7 +1348,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		try {
 		// Step 2: Association discovery and context extraction
 		$disc = $this->discover_pmpro_levels( $course_id, 'reconcile_course' ); if ( ! empty( $disc['incomplete'] ) ) { $this->report_p20_operation( array( 'object_id' => $course_id, 'branch' => ( 'free' === get_post_meta( $course_id, '_tutor_course_price_type', true ) ) ? 'free' : (string) get_post_meta( $course_id, 'tutor_course_selling_option', true ), 'intent' => array( 'selling_option' => get_post_meta( $course_id, 'tutor_course_selling_option', true ), 'price_type' => get_post_meta( $course_id, '_tutor_course_price_type', true ) ), 'reason' => 'incomplete_discovery' ) ); return; }
-		$state = array( 'valid_ids' => array_values( array_merge( (array) $disc['one_time_ids'], (array) $disc['recurring_ids'] ) ), 'one_time_ids' => $disc['one_time_ids'], 'recurring_ids' => $disc['recurring_ids'], 'stale_ids' => $disc['stale_ids'] );
+		$marked = array_map( 'intval', array_merge( (array) $disc['marked_one_time_ids'], (array) $disc['marked_recurring_ids'] ) );
+		$one_time_ids = array_values( array_diff( array_map( 'intval', (array) $disc['one_time_ids'] ), $marked ) );
+		$recurring_ids = array_values( array_diff( array_map( 'intval', (array) $disc['recurring_ids'] ), $marked ) );
+		$state = array( 'valid_ids' => array_values( array_merge( $one_time_ids, $recurring_ids ) ), 'one_time_ids' => $one_time_ids, 'recurring_ids' => $recurring_ids, 'stale_ids' => $disc['stale_ids'], 'marked_one_time_ids' => (array) $disc['marked_one_time_ids'], 'marked_recurring_ids' => (array) $disc['marked_recurring_ids'] );
 		
 		// Read course pricing context from post meta (use standard Tutor Core meta keys)
 		$selling_option = get_post_meta( $course_id, 'tutor_course_selling_option', true );
@@ -1400,7 +1411,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		try {
 		// Step 2: Association discovery and context extraction
 		$disc = $this->discover_pmpro_levels( $bundle_id, 'reconcile_bundle' ); if ( ! empty( $disc['incomplete'] ) ) { $this->report_p20_operation( array( 'object_id' => $bundle_id, 'branch' => ( 'free' === get_post_meta( $bundle_id, '_tutor_course_price_type', true ) ) ? 'free' : (string) get_post_meta( $bundle_id, 'tutor_course_selling_option', true ), 'intent' => array( 'selling_option' => get_post_meta( $bundle_id, 'tutor_course_selling_option', true ), 'price_type' => get_post_meta( $bundle_id, '_tutor_course_price_type', true ) ), 'reason' => 'incomplete_discovery' ) ); $did_work = true; return; }
-		$state = array( 'valid_ids' => array_values( array_merge( (array) $disc['one_time_ids'], (array) $disc['recurring_ids'] ) ), 'one_time_ids' => $disc['one_time_ids'], 'recurring_ids' => $disc['recurring_ids'], 'stale_ids' => $disc['stale_ids'] );
+		$marked = array_map( 'intval', array_merge( (array) $disc['marked_one_time_ids'], (array) $disc['marked_recurring_ids'] ) );
+		$one_time_ids = array_values( array_diff( array_map( 'intval', (array) $disc['one_time_ids'] ), $marked ) );
+		$recurring_ids = array_values( array_diff( array_map( 'intval', (array) $disc['recurring_ids'] ), $marked ) );
+		$state = array( 'valid_ids' => array_values( array_merge( $one_time_ids, $recurring_ids ) ), 'one_time_ids' => $one_time_ids, 'recurring_ids' => $recurring_ids, 'stale_ids' => $disc['stale_ids'], 'marked_one_time_ids' => (array) $disc['marked_one_time_ids'], 'marked_recurring_ids' => (array) $disc['marked_recurring_ids'] );
 		
 		// Read bundle pricing context - prefer values from context (passed from REST), fallback to post meta
 		$selling_option = isset( $ctx['selling_option'] ) ? $ctx['selling_option'] : get_post_meta( $bundle_id, 'tutor_course_selling_option', true );
@@ -1589,7 +1603,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			$price = floatval( get_post_meta( $object_id, 'tutor_course_price', true ) );
 			if ( 'course-bundle' === $post_type && $price <= 0 ) { $price = floatval( $this->calculate_bundle_regular_price( $object_id ) ); }
 			if ( $one_time ) { $lid = (int) $one_time[0]; if ( 'allowed' === PMPro_Level_Deletion_Guard::evaluate( $lid, $object_id, get_post_type( $object_id ) ) ) { $this->update_one_time_survivor_level( $lid ); } }
-			elseif ( $price > 0 ) {
+			elseif ( $price > 0 && array() === (array) ( isset( $state['marked_one_time_ids'] ) ? $state['marked_one_time_ids'] : array() ) ) {
 				$lid = $this->insert_one_time_level( $object_id );
 				if ( $lid && $this->append_current_pmpro_level_meta( $object_id, $lid ) && $this->write_one_time_ownership_markers( $object_id, $lid, $post_type ) ) {
 					$go = true;
@@ -1991,6 +2005,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 		
 		// If no one-time level exists, auto-create one (if price is set)
 		if ( empty( $one_time ) ) {
+			if ( array() === (array) ( isset( $state['marked_one_time_ids'] ) ? $state['marked_one_time_ids'] : array() ) ) {
 			$regular_price = get_post_meta( $course_id, 'tutor_course_price', true );
 			$regular_price = ! empty( $regular_price ) ? floatval( $regular_price ) : 0.0;
 			
@@ -2038,6 +2053,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			} else {
 				$this->log( '[TP-PMPRO] handle_both_and_all_branch skipped_one_time_creation (no price set); ' . $object_label . '=' . $course_id );
 			}
+			}
 		} else {
 			// One-time level already exists - update it with current price and sale
 			$existing_level_id = (int) $one_time[0];
@@ -2062,12 +2078,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 	/**
 	 * Required-mode read-only PMPro level discovery.
 	 *
+	 * A non-ok removal-state read for `p10`, `reconcile_course`, or
+	 * `reconcile_bundle` returns the incomplete result. An ok read, including
+	 * empty metadata, keeps the marked arrays. `permanent_course` and
+	 * `permanent_bundle` do not read removal state.
+	 *
 	 * @param int    $object_id Object post ID.
 	 * @param string $mode      Required discovery mode.
 	 * @return array
 	 */
 	public function discover_pmpro_levels( $object_id, $mode ) {
-		$inc = array( 'incomplete' => true, 'ids' => array(), 'stale_ids' => array(), 'rows' => array(), 'one_time_ids' => array(), 'recurring_ids' => array() );
+		$inc = array( 'incomplete' => true, 'ids' => array(), 'stale_ids' => array(), 'rows' => array(), 'one_time_ids' => array(), 'recurring_ids' => array(), 'marked_one_time_ids' => array(), 'marked_recurring_ids' => array() );
 		if ( ! in_array( $mode, array( 'permanent_course', 'permanent_bundle', 'reconcile_course', 'reconcile_bundle', 'p10' ), true ) ) { return $inc; }
 		global $wpdb;
 		if ( ! isset( $wpdb->pmpro_membership_levels ) || ( 'p10' !== $mode && ! isset( $wpdb->pmpro_memberships_pages ) ) ) { return $inc; }
@@ -2092,7 +2113,31 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( '' !== (string) $wpdb->last_error ) { return $inc; }
 			if ( ! is_array( $row ) || empty( $row['id'] ) ) { $stale[] = $lid; } else { $rid = (int) $row['id']; $rows[ $rid ] = $row; if ( (float) $row['billing_amount'] <= 0 && 0 === (int) $row['cycle_number'] ) { $ot[] = $rid; } else { $rc[] = $rid; } }
 		}
-		return array( 'incomplete' => false, 'ids' => array_values( $ids ), 'stale_ids' => $stale, 'rows' => $rows, 'one_time_ids' => $ot, 'recurring_ids' => $rc );
+		$marked_ot = array();
+		$marked_rc = array();
+		if ( in_array( $mode, array( 'p10', 'reconcile_course', 'reconcile_bundle' ), true ) ) {
+			$read = PMPro_Level_Removal_State::get_object_state( (int) $object_id );
+			if ( ! isset( $read['result'] ) || 'ok' !== $read['result'] ) {
+				return $inc;
+			}
+			$levels = array();
+			if ( isset( $read['payload'] ) && is_array( $read['payload'] ) && isset( $read['payload']['levels'] ) && is_array( $read['payload']['levels'] ) ) {
+				$levels = $read['payload']['levels'];
+			}
+			foreach ( array_keys( $rows ) as $rid ) {
+				$rid  = (int) $rid;
+				$pair = ( isset( $levels[ $rid ] ) && is_array( $levels[ $rid ] ) ) ? $levels[ $rid ] : null;
+				if ( ! is_array( $pair ) || ( PMPro_Level_Removal_State::STATE_RETIRED !== $pair['state'] && PMPro_Level_Removal_State::STATE_UNLINKED !== $pair['state'] ) ) {
+					continue;
+				}
+				if ( PMPro_Level_Removal_State::KIND_ONE_TIME === $pair['kind'] ) {
+					$marked_ot[] = $rid;
+				} elseif ( PMPro_Level_Removal_State::KIND_RECURRING === $pair['kind'] ) {
+					$marked_rc[] = $rid;
+				}
+			}
+		}
+		return array( 'incomplete' => false, 'ids' => array_values( $ids ), 'stale_ids' => $stale, 'rows' => $rows, 'one_time_ids' => $ot, 'recurring_ids' => $rc, 'marked_one_time_ids' => $marked_ot, 'marked_recurring_ids' => $marked_rc );
 	}
 
 	/**
@@ -2207,7 +2252,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 		$disc = $this->discover_pmpro_levels( $id, ( 'courses' === $type ) ? 'reconcile_course' : 'reconcile_bundle' );
 		$err = new \WP_Error( 'tutorpress_pmpro_level_deletion_blocked', __( 'This save would delete a membership level that is protected or ineligible.', 'tutorpress-pmpro' ), array( 'status' => 409 ) );
 		if ( ! empty( $disc['incomplete'] ) ) { return $err; }
-		$tg = ( 'all' === $kind ) ? array_keys( (array) $disc['rows'] ) : ( ( 'ot' === $kind ) ? (array) $disc['one_time_ids'] : (array) $disc['recurring_ids'] );
+		$marked = array_map( 'intval', array_merge( (array) $disc['marked_one_time_ids'], (array) $disc['marked_recurring_ids'] ) );
+		$raw = ( 'all' === $kind ) ? array_keys( (array) $disc['rows'] ) : ( ( 'ot' === $kind ) ? (array) $disc['one_time_ids'] : (array) $disc['recurring_ids'] );
+		$tg = array_values( array_diff( array_map( 'intval', $raw ), $marked ) );
 		foreach ( $tg as $lid ) { $lid = (int) $lid; if ( $lid > 0 && in_array( PMPro_Level_Deletion_Guard::evaluate( $lid, $id, $type ), array( 'protected', 'ineligible', 'ownership_conflict' ), true ) ) { return $err; } }
 		return $prepared_post;
 	}
@@ -2535,7 +2582,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 		// Listed-postmeta-only P10 discovery. Incomplete returns with no mutation.
 
 		$disc = $this->discover_pmpro_levels( $object_id, 'p10' ); if ( ! empty( $disc['incomplete'] ) ) { return; }
-		$valid_ids = array_values( array_merge( (array) $disc['one_time_ids'], (array) $disc['recurring_ids'] ) ); $one_time_ids = $disc['one_time_ids']; $recurring_ids = $disc['recurring_ids'];
+		$marked = array_map( 'intval', array_merge( (array) $disc['marked_one_time_ids'], (array) $disc['marked_recurring_ids'] ) );
+		$one_time_ids = array_values( array_diff( array_map( 'intval', (array) $disc['one_time_ids'] ), $marked ) );
+		$recurring_ids = array_values( array_diff( array_map( 'intval', (array) $disc['recurring_ids'] ), $marked ) );
+		$valid_ids = array_values( array_merge( $one_time_ids, $recurring_ids ) );
 
 		if ( empty( $valid_ids ) && ! empty( $disc['stale_ids'] ) ) {
 			// Stale listed IDs remain in current meta for P20.
@@ -2572,7 +2622,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 			if ( 'allowed' === PMPro_Level_Deletion_Guard::evaluate( $lid, $object_id, $post_type ) ) {
 				$this->update_one_time_survivor_level( $lid );
 			}
-		} else {
+		} elseif ( array() === (array) $disc['marked_one_time_ids'] ) {
 			$lid = $this->insert_one_time_level( $object_id );
 			if ( $lid && $this->append_current_pmpro_level_meta( $object_id, $lid ) ) {
 				$this->write_p10_new_insert_evidence( $object_id, $lid, $post_type );

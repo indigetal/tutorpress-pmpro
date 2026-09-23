@@ -17,6 +17,8 @@ class PMPro_Association {
     /**
      * Ensure a single association row exists between a course and a PMPro level.
      *
+     * An exact unlinked pair returns before any insert.
+     *
      * @param int $course_id
      * @param int $level_id
      * @return void
@@ -36,6 +38,10 @@ class PMPro_Association {
         if ( 'courses' !== $post_type ) {
             return;
         }
+        $pair = PMPro_Level_Removal_State::get_pair( $course_id, $level_id );
+        if ( 'ok' === $pair['result'] && is_array( $pair['pair'] ) && PMPro_Level_Removal_State::STATE_UNLINKED === $pair['pair']['state'] ) {
+            return;
+        }
         // Check if association exists.
         $exists = $wpdb->get_var( $wpdb->prepare( "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d AND page_id = %d LIMIT 1", $level_id, $course_id ) );
         if ( null === $exists ) {
@@ -46,6 +52,7 @@ class PMPro_Association {
     /**
      * Sync associations for a course to exactly match the provided level IDs.
      * Adds missing rows and removes extra rows for that course.
+     * Retired level IDs omitted from the submitted list stay in the desired set.
      *
      * @param int   $course_id
      * @param array $level_ids
@@ -64,6 +71,19 @@ class PMPro_Association {
             return;
         }
         $level_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $level_ids ) ) ) );
+
+        $read = PMPro_Level_Removal_State::get_object_state( $course_id );
+        if ( 'ok' !== $read['result'] ) {
+            return;
+        }
+        if ( is_array( $read['payload'] ) ) {
+            foreach ( $read['payload']['levels'] as $id => $pair ) {
+                if ( PMPro_Level_Removal_State::STATE_RETIRED === $pair['state'] ) {
+                    $level_ids[] = (int) $id;
+                }
+            }
+            $level_ids = array_values( array_unique( $level_ids ) );
+        }
 
         global $wpdb;
         $existing = $wpdb->get_col( $wpdb->prepare( "SELECT membership_id FROM {$wpdb->pmpro_memberships_pages} WHERE page_id = %d", $course_id ) );

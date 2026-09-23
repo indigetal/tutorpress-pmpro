@@ -376,6 +376,261 @@ class PMPro_Level_Cleanup {
         }
         PMPro_Level_Deletion_Coordinator::invalidate_deletion_caches( $level_id, array( $object_id ) ); return 'ok';
     }
+
+    /**
+     * Re-read requester association evidence after in-transaction writes.
+     *
+     * Uses prepared SQL only so a stale post_meta cache cannot hide leftover
+     * rows. Other objects are not queried. This method does not write,
+     * acquire locks, or invalidate caches.
+     *
+     * Order matches sequence_requester_writes: page, group map, reverse,
+     * then listing. Query failure, last_error, or a missing table name is
+     * state_read_error. Leftover requester evidence is partial_failure.
+     *
+     * @since 1.0.9
+     *
+     * @param int $object_id Course or bundle post ID.
+     * @param int $level_id  PMPro membership level ID.
+     * @return string ok, state_read_error, or partial_failure.
+     */
+    private static function requester_association_cleared( $object_id, $level_id ) {
+        global $wpdb;
+
+        $object_id = (int) $object_id;
+        $level_id  = (int) $level_id;
+        if ( $object_id <= 0 || $level_id <= 0 ) {
+            return 'state_read_error';
+        }
+
+        if (
+            ! isset( $wpdb->pmpro_memberships_pages )
+            || ! is_string( $wpdb->pmpro_memberships_pages )
+            || '' === $wpdb->pmpro_memberships_pages
+        ) {
+            return 'state_read_error';
+        }
+        $wpdb->last_error = '';
+        $page             = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT page_id FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d AND page_id = %d LIMIT 1",
+                $level_id,
+                $object_id
+            )
+        );
+        if ( false === $page || '' !== (string) $wpdb->last_error ) {
+            return 'state_read_error';
+        }
+        if ( null !== $page ) {
+            return 'partial_failure';
+        }
+
+        if ( ! isset( $wpdb->postmeta ) || ! is_string( $wpdb->postmeta ) || '' === $wpdb->postmeta ) {
+            return 'state_read_error';
+        }
+        $wpdb->last_error = '';
+        $groups           = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s",
+                $object_id,
+                '_tutorpress_pmpro_group_id'
+            )
+        );
+        if ( false === $groups || null === $groups || '' !== (string) $wpdb->last_error ) {
+            return 'state_read_error';
+        }
+        $ids = array();
+        foreach ( $groups as $raw ) {
+            $g = (int) $raw;
+            if ( $g > 0 ) {
+                $ids[ $g ] = true;
+            }
+        }
+        if ( array() !== $ids ) {
+            if ( 1 !== count( $ids ) ) {
+                return 'partial_failure';
+            }
+            if (
+                ! isset( $wpdb->pmpro_membership_levels_groups )
+                || ! is_string( $wpdb->pmpro_membership_levels_groups )
+                || '' === $wpdb->pmpro_membership_levels_groups
+            ) {
+                return 'state_read_error';
+            }
+            $wpdb->last_error = '';
+            $hit              = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT level FROM {$wpdb->pmpro_membership_levels_groups} WHERE `level` = %d AND `group` = %d LIMIT 1",
+                    $level_id,
+                    (int) key( $ids )
+                )
+            );
+            if ( false === $hit || '' !== (string) $wpdb->last_error ) {
+                return 'state_read_error';
+            }
+            if ( null !== $hit ) {
+                return 'partial_failure';
+            }
+        }
+
+        if (
+            ! isset( $wpdb->pmpro_membership_levelmeta )
+            || ! is_string( $wpdb->pmpro_membership_levelmeta )
+            || '' === $wpdb->pmpro_membership_levelmeta
+        ) {
+            return 'state_read_error';
+        }
+        foreach ( array( 'tutorpress_course_id', 'tutorpress_bundle_id' ) as $key ) {
+            $wpdb->last_error = '';
+            $hit              = $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT meta_value FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d AND meta_key = %s AND meta_value = %s LIMIT 1",
+                    $level_id,
+                    $key,
+                    (string) $object_id
+                )
+            );
+            if ( false === $hit || '' !== (string) $wpdb->last_error ) {
+                return 'state_read_error';
+            }
+            if ( null !== $hit ) {
+                return 'partial_failure';
+            }
+        }
+
+        $wpdb->last_error = '';
+        $list             = $wpdb->get_col(
+            $wpdb->prepare(
+                "SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s",
+                $object_id,
+                '_tutorpress_pmpro_levels'
+            )
+        );
+        if ( false === $list || null === $list || '' !== (string) $wpdb->last_error ) {
+            return 'state_read_error';
+        }
+        foreach ( $list as $raw ) {
+            $val = maybe_unserialize( $raw );
+            if ( is_array( $val ) && in_array( $level_id, array_map( 'intval', $val ), true ) ) {
+                return 'partial_failure';
+            }
+        }
+
+        return 'ok';
+    }
+
+    /**
+     * Record unlinked pair state and remove requester associations.
+     *
+     * Requires a caller-owned active transaction plus this connection's
+     * level and object advisory locks. Never starts, commits, or rolls
+     * back, and never invalidates caches.
+     *
+     * Kind must already be allowlisted one_time or recurring. This method
+     * does not classify a live billing row. IS_USED_LOCK returns the
+     * holding connection id; both locks must equal CONNECTION_ID().
+     *
+     * @since 1.0.9
+     *
+     * @param int    $object_id Course or bundle post ID.
+     * @param int    $level_id  PMPro membership level ID.
+     * @param string $kind      Preclassified one_time or recurring.
+     * @return string ok, skip, invalid_state, state_read_error, or partial_failure.
+     */
+    public static function unlink_requester_with_state( $object_id, $level_id, $kind ) {
+        global $wpdb;
+
+        $object_id = (int) $object_id;
+        $level_id  = (int) $level_id;
+        $kinds     = array(
+            PMPro_Level_Removal_State::KIND_ONE_TIME,
+            PMPro_Level_Removal_State::KIND_RECURRING,
+        );
+
+        if ( $object_id <= 0 || $level_id <= 0 ) {
+            return 'skip';
+        }
+        if ( ! in_array( $kind, $kinds, true ) ) {
+            return 'skip';
+        }
+        if ( true !== PMPro_Level_Deletion_Coordinator::session_in_transaction() ) {
+            return 'skip';
+        }
+
+        $wpdb->last_error = '';
+        $connection_id    = $wpdb->get_var( 'SELECT CONNECTION_ID()' );
+        $level_holder     = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT IS_USED_LOCK( %s )',
+                PMPro_Level_Deletion_Coordinator::advisory_lock_name( $level_id )
+            )
+        );
+        $object_holder    = $wpdb->get_var(
+            $wpdb->prepare(
+                'SELECT IS_USED_LOCK( %s )',
+                PMPro_Level_Removal_State::object_lock_name( $object_id )
+            )
+        );
+        if (
+            '' !== (string) $wpdb->last_error
+            || null === $connection_id
+            || false === $connection_id
+            || '' === (string) $connection_id
+            || null === $level_holder
+            || null === $object_holder
+            || (string) $level_holder !== (string) $connection_id
+            || (string) $object_holder !== (string) $connection_id
+        ) {
+            return 'skip';
+        }
+
+        $locked = PMPro_Level_Removal_State::lock_object_row( $object_id );
+        if ( 'ok' !== $locked['result'] ) {
+            return $locked['result'];
+        }
+
+        $merged = PMPro_Level_Removal_State::merge_pair(
+            $object_id,
+            $level_id,
+            PMPro_Level_Removal_State::STATE_UNLINKED,
+            $kind
+        );
+        if ( 'ok' !== $merged['result'] ) {
+            return $merged['result'];
+        }
+
+        if ( true !== self::sequence_requester_writes( $object_id, $level_id ) ) {
+            return 'partial_failure';
+        }
+
+        $verified = PMPro_Level_Removal_State::lock_object_row( $object_id );
+        if ( 'ok' !== $verified['result'] ) {
+            return $verified['result'];
+        }
+
+        $pair = (
+            is_array( $verified['payload'] )
+            && isset( $verified['payload']['levels'][ $level_id ] )
+        )
+            ? $verified['payload']['levels'][ $level_id ]
+            : null;
+
+        if (
+            ! is_array( $pair )
+            || PMPro_Level_Removal_State::STATE_UNLINKED !== $pair['state']
+            || $kind !== $pair['kind']
+            || true !== $verified['payload']['removed_restriction']
+        ) {
+            return 'partial_failure';
+        }
+
+        $cleared = self::requester_association_cleared( $object_id, $level_id );
+        if ( 'ok' !== $cleared ) {
+            return $cleared;
+        }
+
+        return 'ok';
+    }
 }
 
 

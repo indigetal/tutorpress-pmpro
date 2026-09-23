@@ -323,7 +323,13 @@ class Backend_Pricing {
 			}
 
 			$level_ids = array_values( array_unique( array_filter( $level_ids ) ) );
-			$plans     = array();
+			$found     = $level_ids;
+			$level_ids = $this->exclude_marked_sale_ids( $object_id, $level_ids );
+			if ( ! is_array( $level_ids ) || ( array() === $level_ids && array() !== $found ) ) {
+				$info['plans'] = array();
+				return $info;
+			}
+			$plans = array();
 			if ( ! empty( $level_ids ) ) {
 				if ( ! class_exists( 'TutorPress_PMPro_Mapper' ) ) {
 					$mapper_file = dirname( __DIR__ ) . '/utilities/class-pmpro-mapper.php';
@@ -550,8 +556,33 @@ class Backend_Pricing {
 
 		// Remove duplicates and ensure integers
 		$level_ids = array_values( array_unique( array_filter( $level_ids ) ) );
+		$filtered  = $this->exclude_marked_sale_ids( $object_id, $level_ids );
 
-		return $level_ids;
+		return is_array( $filtered ) ? $filtered : array();
+	}
+
+	/**
+	 * Drop retired and unlinked level IDs from a sale list.
+	 *
+	 * A non-ok removal-state read returns null so callers can withhold sale
+	 * output. An empty discovered list is unchanged. Marked IDs are removed
+	 * from every other list.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param int   $object_id Course or bundle post ID.
+	 * @param int[] $level_ids Discovered level IDs.
+	 * @return int[]|null Filtered IDs, or null when removal state cannot be read.
+	 */
+	private function exclude_marked_sale_ids( $object_id, array $level_ids ) {
+		$marked = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_marked( $object_id );
+		if ( 'ok' !== $marked['result'] ) {
+			return null;
+		}
+		if ( array() === $level_ids ) {
+			return $level_ids;
+		}
+		return array_values( array_diff( $level_ids, $marked['level_ids'] ) );
 	}
 
 	/**

@@ -167,11 +167,6 @@ class Pricing_Display {
 			return $is_purchasable;
 		}
 
-		$pmpro_levels = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
-		if ( is_array( $pmpro_levels ) && ! empty( $pmpro_levels ) ) {
-			return true;
-		}
-
 		$level_ids = $this->get_level_ids_for_object( $course_id, true );
 		if ( ! empty( $level_ids ) ) {
 			return true;
@@ -1486,7 +1481,8 @@ class Pricing_Display {
 	 *
 	 * Phase 3: Helper method to discover PMPro levels associated with a course or bundle.
 	 * Uses bundle-specific meta key (tutorpress_bundle_id) for bundles and course-specific
-	 * meta key (tutorpress_course_id) for courses.
+	 * meta key (tutorpress_course_id) for courses. Retired and unlinked pairs are omitted.
+	 * A non-ok removal read returns no IDs.
 	 *
 	 * @since 1.0.0
 	 * @param int  $object_id Course or bundle post ID.
@@ -1532,7 +1528,15 @@ class Pricing_Display {
 		$level_ids = array_map( 'intval', array_unique( $level_ids ) );
 		$level_ids = array_filter( $level_ids ); // Remove zeros
 
-		return $level_ids;
+		$marked = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_marked( $object_id );
+		if ( 'ok' !== $marked['result'] ) {
+			return array();
+		}
+		if ( empty( $marked['level_ids'] ) ) {
+			return $level_ids;
+		}
+
+		return array_values( array_diff( $level_ids, array_map( 'intval', $marked['level_ids'] ) ) );
 	}
 
 	/**

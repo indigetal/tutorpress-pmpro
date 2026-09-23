@@ -38,33 +38,53 @@ try {
 	tutorpress_pmpro_lds_assert( empty( $fo['complete'] ) && ! empty( $fo['protected'] ) && 'unsaved_checkout_race' === $fo['residual'], 'o-fail' );
 	tutorpress_pmpro_lds_pass( 'order inventory' );
 	foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; }
+	tutorpress_pmpro_lds_assert( 'protected' === $g::classify_protection( $lid ), 'prot-yes' );
+	tutorpress_pmpro_lds_assert( 'unprotected' === $g::classify_protection( $lid + 1 ), 'prot-no' );
+	$GLOBALS['tutorpress_pmpro_lds_reg']['wpdb']['pmpro_memberships_users'] = $wpdb->pmpro_memberships_users;
+	$wpdb->pmpro_memberships_users = 'tp_lds_missing';
+	tutorpress_pmpro_lds_assert( 'incomplete' === $g::classify_protection( $lid ) && 'protected' === $g::evaluate( $lid, $lid, 'courses' ), 'prot-inc' );
+	$wpdb->pmpro_memberships_users = $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb']['pmpro_memberships_users'];
+	tutorpress_pmpro_lds_pass( 'protection completeness' );
 	$a = $lid + 2; $b = $lid + 3; $e = $lid + 1; $lm = $wpdb->pmpro_membership_levelmeta;
+	$GLOBALS['tutorpress_pmpro_lds_reg']['wpdb']['pmpro_membership_levelmeta'] = $wpdb->pmpro_membership_levelmeta; $wpdb->pmpro_membership_levelmeta = 'tp_lds_missing';
+	tutorpress_pmpro_lds_assert( 'protected' === $g::evaluate( $lid, $a, 'courses' ) && 'ineligible' === $g::classify_relationship( $lid, $a, 'courses' ), 'prot-malformed' );
+	$wpdb->pmpro_membership_levelmeta = $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb']['pmpro_membership_levelmeta'];
+	foreach ( array( array( 'tutorpress_managed', '1' ), array( 'tutorpress_course_id', (string) $a ) ) as $m ) { $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $lid, 'meta_key' => $m[0], 'meta_value' => $m[1] ) ); }
+	$wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $lid, 'page_id' => $b ) );
+	tutorpress_pmpro_lds_assert( 'protected' === $g::evaluate( $lid, $a, 'courses' ) && 'shared_unlink' === $g::classify_relationship( $lid, $a, 'courses' ), 'prot-shared' );
+	$wpdb->query( $wpdb->prepare( "DELETE FROM {$lm} WHERE pmpro_membership_level_id = %d", $lid ) ); $wpdb->delete( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $lid ) );
 	foreach ( array( array( 'tutorpress_managed', '1' ), array( 'tutorpress_course_id', (string) $a ) ) as $m ) { $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => $m[0], 'meta_value' => $m[1] ) ); }
 	$wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e, 'page_id' => $a ) );
-	tutorpress_pmpro_lds_assert( 'allowed' === $g::evaluate( $e, $a, 'courses' ) && 'ineligible' === $g::evaluate( 0, $a, 'courses' ) && 'ownership_conflict' === $g::evaluate( $e, $a, 'course-bundle' ), 'no-pm' );
-	$wpdb->delete( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e ) ); tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ), 'rev-only' );
-	$wpdb->query( $wpdb->prepare( "DELETE FROM {$lm} WHERE pmpro_membership_level_id = %d", $e ) ); $wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e, 'page_id' => $a ) ); tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ), 'page-only' );
-	update_post_meta( $a, '_tutorpress_pmpro_levels', array( $e ) ); $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => 'tutorpress_course_id', 'meta_value' => (string) $b ) ); tutorpress_pmpro_lds_assert( 'ownership_conflict' === $g::evaluate( $e, $a, 'courses' ), 'conflict' );
+	tutorpress_pmpro_lds_assert( 'allowed' === $g::evaluate( $e, $a, 'courses' ) && 'ineligible' === $g::evaluate( 0, $a, 'courses' ) && 'ownership_conflict' === $g::evaluate( $e, $a, 'course-bundle' ) && 'allowed' === $g::classify_relationship( $e, $a, 'courses' ) && 'ineligible' === $g::classify_relationship( 0, $a, 'courses' ) && 'ownership_conflict' === $g::classify_relationship( $e, $a, 'course-bundle' ), 'no-pm' );
+	$wpdb->delete( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e ) ); tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ) && 'ineligible' === $g::classify_relationship( $e, $a, 'courses' ), 'rev-only' );
+	$wpdb->query( $wpdb->prepare( "DELETE FROM {$lm} WHERE pmpro_membership_level_id = %d", $e ) ); $wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e, 'page_id' => $a ) ); tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ) && 'ineligible' === $g::classify_relationship( $e, $a, 'courses' ), 'page-only' );
+	update_post_meta( $a, '_tutorpress_pmpro_levels', array( $e ) ); $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => 'tutorpress_course_id', 'meta_value' => (string) $b ) ); tutorpress_pmpro_lds_assert( 'ownership_conflict' === $g::evaluate( $e, $a, 'courses' ) && 'ownership_conflict' === $g::classify_relationship( $e, $a, 'courses' ), 'conflict' );
 	delete_post_meta( $a, '_tutorpress_pmpro_levels' ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$lm} WHERE pmpro_membership_level_id = %d", $e ) ); $wpdb->delete( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e ) );
 	$wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => 'tutorpress_course_id', 'meta_value' => (string) $a ) ); $wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e, 'page_id' => $b ) );
-	tutorpress_pmpro_lds_assert( 'shared_unlink' === $g::evaluate( $e, $a, 'courses' ) && 'protected' === $g::evaluate( $lid, $a, 'courses' ), 'shared-prot' );
+	tutorpress_pmpro_lds_assert( 'shared_unlink' === $g::evaluate( $e, $a, 'courses' ) && 'protected' === $g::evaluate( $lid, $a, 'courses' ) && 'shared_unlink' === $g::classify_relationship( $e, $a, 'courses' ), 'shared-prot' );
 	$GLOBALS['tutorpress_pmpro_lds_reg']['wpdb']['pmpro_membership_levelmeta'] = $wpdb->pmpro_membership_levelmeta; $wpdb->pmpro_membership_levelmeta = 'tp_lds_missing';
-	tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ), 'fail-lm' );
+	tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ) && 'ineligible' === $g::classify_relationship( $e, $a, 'courses' ), 'fail-lm' );
 	tutorpress_pmpro_lds_pass( 'course ownership' );
 	foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; }
 	$wpdb->query( $wpdb->prepare( "DELETE FROM {$lm} WHERE pmpro_membership_level_id = %d", $e ) ); $wpdb->delete( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e ) );
 	foreach ( array( array( 'tutorpress_managed', '1' ), array( 'tutorpress_course_id', (string) $a ), array( 'TUTORPRESS_PMPRO_membership_model', 'category_wise_membership' ) ) as $m ) { $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => $m[0], 'meta_value' => $m[1] ) ); }
 	$wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e, 'page_id' => $a ) );
-	tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ), 'cat-wise' );
+	tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ) && 'ineligible' === $g::classify_relationship( $e, $a, 'courses' ), 'cat-wise' );
 	$wpdb->update( $lm, array( 'meta_value' => 'full_website_membership' ), array( 'pmpro_membership_level_id' => $e, 'meta_key' => 'TUTORPRESS_PMPRO_membership_model' ) );
-	tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ), 'full-site' );
+	tutorpress_pmpro_lds_assert( 'ineligible' === $g::evaluate( $e, $a, 'courses' ) && 'ineligible' === $g::classify_relationship( $e, $a, 'courses' ), 'full-site' );
 	$wpdb->delete( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => 'TUTORPRESS_PMPRO_membership_model' ) );
-	tutorpress_pmpro_lds_assert( 'allowed' === $g::evaluate( $e, $a, 'courses' ), 'model-gate' );
+	tutorpress_pmpro_lds_assert( 'allowed' === $g::evaluate( $e, $a, 'courses' ) && 'allowed' === $g::classify_relationship( $e, $a, 'courses' ), 'model-gate' );
 	$wpdb->query( $wpdb->prepare( "DELETE FROM {$lm} WHERE pmpro_membership_level_id = %d", $e ) ); $wpdb->delete( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e ) ); $c = $lid + 4;
 	$wpdb->insert( $wpdb->pmpro_groups, array( 'name' => 'tp4b-' . $e, 'allow_multiple_selections' => 0 ) ); $gid = (int) $wpdb->insert_id;
 	$wpdb->insert( $wpdb->pmpro_membership_levels_groups, array( 'level' => $e, 'group' => $gid ) );
 	$wpdb->insert( $wpdb->postmeta, array( 'post_id' => $c, 'meta_key' => '_tutorpress_pmpro_group_id', 'meta_value' => (string) $gid ) );
 	foreach ( array( array( 'tutorpress_managed', '1' ), array( 'tutorpress_bundle_id', (string) $c ) ) as $m ) { $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => $m[0], 'meta_value' => $m[1] ) ); }
-	tutorpress_pmpro_lds_assert( 'allowed' === $g::evaluate( $e, $c, 'course-bundle' ), 'bundle' );
+	tutorpress_pmpro_lds_assert( 'allowed' === $g::evaluate( $e, $c, 'course-bundle' ) && 'allowed' === $g::classify_relationship( $e, $c, 'course-bundle' ), 'bundle' );
 	tutorpress_pmpro_lds_pass( 'bundle domain' );
-} catch ( Throwable $e ) { exit( 1 ); } finally { global $wpdb; foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; } $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_users} WHERE membership_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_subscriptions} WHERE membership_level_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_orders} WHERE membership_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels_groups} WHERE `level` = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_groups} WHERE name = %s", 'tp4b-' . ( $lid + 1 ) ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->postmeta} WHERE ( post_id IN (%d,%d) AND meta_key = %s ) OR ( post_id = %d AND meta_key = %s )", $lid + 2, $lid + 3, '_tutorpress_pmpro_levels', $lid + 4, '_tutorpress_pmpro_group_id' ) ); tutorpress_pmpro_lds_cleanup(); }
+	foreach ( array( array( 'tutorpress_managed', '1' ), array( 'tutorpress_course_id', (string) $a ) ) as $m ) { $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $lid, 'meta_key' => $m[0], 'meta_value' => $m[1] ) ); }
+	$wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $lid, 'page_id' => $a ) );
+	tutorpress_pmpro_lds_assert( 'protected' === $g::evaluate( $lid, $a, 'courses' ) && 'allowed' === $g::classify_relationship( $lid, $a, 'courses' ), 'rel-prot-sole' );
+	$wpdb->query( $wpdb->prepare( "DELETE FROM {$lm} WHERE pmpro_membership_level_id = %d", $lid ) );
+	$wpdb->delete( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $lid ) );
+	tutorpress_pmpro_lds_pass( 'relationship classifier' );
+} catch ( Throwable $e ) { exit( 1 ); } finally { global $wpdb; foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; } $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_users} WHERE membership_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_subscriptions} WHERE membership_level_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_orders} WHERE membership_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $lid ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels_groups} WHERE `level` = %d", $lid + 1 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_groups} WHERE name = %s", 'tp4b-' . ( $lid + 1 ) ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->postmeta} WHERE ( post_id IN (%d,%d) AND meta_key = %s ) OR ( post_id = %d AND meta_key = %s )", $lid + 2, $lid + 3, '_tutorpress_pmpro_levels', $lid + 4, '_tutorpress_pmpro_group_id' ) ); tutorpress_pmpro_lds_cleanup(); }

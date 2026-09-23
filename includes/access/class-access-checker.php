@@ -77,21 +77,28 @@ class Access_Checker implements Access_Checker_Interface {
 		// Prepare data.
 		$user_id = null === $user_id ? get_current_user_id() : $user_id;
 
+		$read = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_object_state( $course_id );
+		if ( 'ok' !== $read['result'] ) {
+			return false;
+		}
+
 		// Phase 4, Step 4.1: Check WordPress object cache
 		// Cache key format: course_{course_id}_user_{user_id}_access
 		$cache_key   = 'course_' . $course_id . '_user_' . $user_id . '_access';
 		$cache_group = 'tutorpress_pmpro';
 
-		$cached_result = wp_cache_get( $cache_key, $cache_group );
-		if ( false !== $cached_result ) {
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				error_log( '[TP-PMPRO] has_course_access cache HIT course=' . $course_id . ' user=' . $user_id );
+		if ( null === $read['payload'] ) {
+			$cached_result = wp_cache_get( $cache_key, $cache_group );
+			if ( false !== $cached_result ) {
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					error_log( '[TP-PMPRO] has_course_access cache HIT course=' . $course_id . ' user=' . $user_id );
+				}
+				return $cached_result;
 			}
-			return $cached_result;
-		}
 
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[TP-PMPRO] has_course_access cache MISS course=' . $course_id . ' user=' . $user_id );
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				error_log( '[TP-PMPRO] has_course_access cache MISS course=' . $course_id . ' user=' . $user_id );
+			}
 		}
 
 		$has_course_access = false;
@@ -135,6 +142,10 @@ class Access_Checker implements Access_Checker_Interface {
 			if ( is_array( $tutorpress_levels ) && ! empty( $tutorpress_levels ) ) {
 				$has_course_levels = true;
 			}
+		}
+
+		if ( is_array( $read['payload'] ) && true === $read['payload']['removed_restriction'] ) {
+			$has_course_levels = true;
 		}
 
 		// Only grant automatic access if:
@@ -324,6 +335,15 @@ class Access_Checker implements Access_Checker_Interface {
 		$model = get_pmpro_membership_level_meta( $level_id, 'TUTORPRESS_PMPRO_membership_model', true );
 		if ( ! empty( $model ) ) {
 			return false; // Has a model, not a course-specific level
+		}
+
+		$pair = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_pair( $course_id, $level_id );
+		if (
+			'ok' === $pair['result']
+			&& is_array( $pair['pair'] )
+			&& \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::STATE_UNLINKED === $pair['pair']['state']
+		) {
+			return false;
 		}
 
 		// Check pmpro_memberships_pages association

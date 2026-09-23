@@ -252,6 +252,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 
+		$level_ids = $this->filter_visible_level_ids( $course_id, $level_ids );
+
 		// Build plans array from level IDs (or empty if none)
 		if ( ! empty( $level_ids ) ) {
 			$mapper = new \TutorPress_PMPro_Mapper();
@@ -354,6 +356,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				}
 			}
 		}
+
+		$level_ids = $this->filter_visible_level_ids( $bundle_id, $level_ids );
 
 		if ( ! empty( $level_ids ) ) {
 			$mapper = new \TutorPress_PMPro_Mapper();
@@ -635,6 +639,13 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( $request->has_param( 'description' ) ) {
 			$update_data['description'] = sanitize_textarea_field( $request->get_param( 'description' ) );
 		}
+		$removal_object_id = absint( $object_id );
+		if ( $removal_object_id > 0 ) {
+			$blocked = $this->block_marked_level_update( $removal_object_id, $plan_id );
+			if ( null !== $blocked ) {
+				return $blocked;
+			}
+		}
         // Normalize create/update semantics depending on payment_type
         $payment_type = $request->get_param( 'payment_type' );
         if ( 'one_time' === $payment_type ) {
@@ -762,7 +773,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	}
 
 	/**
-	 * Delete a PMPro membership level and cleanup mappings.
+	 * Remove a PMPro level from the requesting course or bundle.
 	 *
 	 * @param WP_REST_Request $request
 	 * @return WP_REST_Response|WP_Error
@@ -776,7 +787,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( ! current_user_can( 'edit_post', $object_id ) ) { return new WP_Error( 'rest_forbidden', __( 'You do not have permission to access this endpoint.', 'tutorpress-pmpro' ), [ 'status' => rest_authorization_required_code() ] ); }
 		$info = $this->detect_object_type( $object_id ); $validation = call_user_func( $info['validate'], $object_id ); if ( is_wp_error( $validation ) ) { return $validation; }
 		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) { require_once __DIR__ . '/../utilities/class-pmpro-level-cleanup.php'; }
-		$code = \TUTORPRESS_PMPRO\PMPro_Level_Deletion_Coordinator::delete_level( $plan_id, $object_id, $info['post_type'] ); if ( in_array( $code, array( 'ok', 'committed_with_warning' ), true ) ) { return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( 'committed_with_warning' === $code ? array( 'warning' => true ) : null, __( 'PMPro membership level deleted.', 'tutorpress-pmpro' ) ) ); }
+		$code = \TUTORPRESS_PMPRO\PMPro_Level_Removal_Coordinator::remove_level( $plan_id, $object_id );
+		if ( in_array( $code, array( 'ok', 'committed_with_warning', 'retired', 'unlinked' ), true ) ) {
+			return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( 'committed_with_warning' === $code ? array( 'warning' => true ) : null, __( 'PMPro membership level removed.', 'tutorpress-pmpro' ) ) );
+		}
 		$map = array( 'missing' => 404, 'protected' => 409, 'ineligible' => 409, 'ownership_conflict' => 409, 'busy' => 409, 'conflict' => 409 ); return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to delete PMPro level.', 'tutorpress-pmpro' ), $code, isset( $map[ $code ] ) ? $map[ $code ] : 500 );
 	}
 
@@ -881,6 +895,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
         // Sanitize IDs
 		$ordered_ids = array_values( array_filter( array_map( 'absint', $ordered_ids ) ) );
 
+		$read = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_object_state( $object_id );
+		if ( 'ok' !== $read['result'] ) {
+			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to reorder subscription plans.', 'tutorpress-pmpro' ), $read['result'], 500 );
+		}
+
 		// Best-effort: ensure reverse meta (use appropriate meta key based on post type)
         if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
 			foreach ( $ordered_ids as $lid ) {
@@ -894,6 +913,51 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
         }
 
 		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $ordered_ids, __( 'Subscription plans reordered.', 'tutorpress-pmpro' ) ) );
+	}
+
+	/**
+	 * Drop retired and unlinked level IDs from one object's plan list.
+	 *
+	 * A non-ok removal-state read exposes no object-specific plans.
+	 * An ok read with no marked IDs leaves the original list unchanged.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param int   $object_id Course or bundle ID.
+	 * @param array $level_ids Candidate level IDs.
+	 * @return array Visible level IDs.
+	 */
+	private function filter_visible_level_ids( $object_id, $level_ids ) {
+		$marked = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_marked( $object_id );
+		if ( 'ok' !== $marked['result'] ) {
+			return array();
+		}
+		if ( empty( $marked['level_ids'] ) ) {
+			return $level_ids;
+		}
+		return array_values( array_diff( array_map( 'intval', (array) $level_ids ), array_map( 'intval', $marked['level_ids'] ) ) );
+	}
+
+	/**
+	 * Reject an update of a marked pair or an unreadable removal map.
+	 *
+	 * Call only for a positive object ID. An ok read with a null pair proceeds.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param int $object_id Course or bundle ID.
+	 * @param int $level_id  PMPro level ID.
+	 * @return WP_Error|null Error response, or null when the update may proceed.
+	 */
+	private function block_marked_level_update( $object_id, $level_id ) {
+		$read = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_pair( $object_id, $level_id );
+		if ( 'ok' !== $read['result'] ) {
+			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to update PMPro level.', 'tutorpress-pmpro' ), $read['result'], 500 );
+		}
+		if ( is_array( $read['pair'] ) && in_array( $read['pair']['state'], array( \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::STATE_RETIRED, \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::STATE_UNLINKED ), true ) ) {
+			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to update PMPro level.', 'tutorpress-pmpro' ), 'conflict', 409 );
+		}
+		return null;
 	}
 
 	/**
