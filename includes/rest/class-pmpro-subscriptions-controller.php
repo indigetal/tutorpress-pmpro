@@ -91,16 +91,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 					[
 						'methods' => WP_REST_Server::CREATABLE,
 						'callback' => [ $this, 'create_subscription_plan' ],
-						'permission_callback' => function( $request ) {
-							$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
-							if ( $object_id && current_user_can( 'edit_post', $object_id ) ) {
-								return true;
-							}
-							return $this->check_permission( $request );
-						},
+						'permission_callback' => [ $this, 'authorize_subscription_object' ],
 						'args' => [
-							'course_id' => [ 'required' => false, 'type' => 'integer', 'sanitize_callback' => 'absint' ],
-							'object_id' => [ 'required' => false, 'type' => 'integer', 'sanitize_callback' => 'absint' ],
+							'course_id' => [ 'required' => false, 'type' => 'integer' ],
+							'object_id' => [ 'required' => false, 'type' => 'integer' ],
 							'plan_name' => [ 'required' => true, 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ],
 							'regular_price' => [ 'required' => true, 'type' => 'number', 'minimum' => 0 ],
 							'object_title' => [ 'required' => false, 'type' => 'string', 'sanitize_callback' => 'sanitize_text_field' ],
@@ -117,13 +111,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 					[
 						'methods' => WP_REST_Server::EDITABLE,
 						'callback' => [ $this, 'update_subscription_plan' ],
-						'permission_callback' => function( $request ) {
-							$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
-							if ( $object_id && current_user_can( 'edit_post', $object_id ) ) {
-								return true;
-							}
-							return $this->check_permission( $request );
-						},
+						'permission_callback' => [ $this, 'authorize_subscription_object' ],
 						'args' => [
 							'id' => [ 'required' => true, 'type' => 'integer', 'sanitize_callback' => 'absint' ],
 						],
@@ -139,13 +127,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 					[
 						'methods' => WP_REST_Server::DELETABLE,
 						'callback' => [ $this, 'delete_subscription_plan' ],
-						'permission_callback' => function( $request ) {
-							$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
-							if ( $object_id && current_user_can( 'edit_post', $object_id ) ) {
-								return true;
-							}
-							return $object_id ? new WP_Error( 'rest_forbidden', __( 'You do not have permission to access this endpoint.', 'tutorpress-pmpro' ), [ 'status' => 403 ] ) : new WP_Error( 'missing_object_id', __( 'Object ID is required (course_id or object_id).', 'tutorpress-pmpro' ), [ 'status' => 400 ] );
-						},
+						'permission_callback' => [ $this, 'authorize_subscription_object' ],
 						'args' => [
 							'id' => [ 'required' => true, 'type' => 'integer', 'sanitize_callback' => 'absint' ],
 						],
@@ -160,14 +142,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			[
 				[
 					'methods' => WP_REST_Server::CREATABLE,
-					'callback' => [ $this, 'duplicate_subscription_plan' ],
-					'permission_callback' => function( $request ) {
-						$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
-						if ( $object_id && current_user_can( 'edit_post', $object_id ) ) {
-							return true;
-						}
-						return $this->check_permission( $request );
-					},
+						'callback' => [ $this, 'duplicate_subscription_plan' ],
+						'permission_callback' => [ $this, 'authorize_subscription_object' ],
 					'args' => [
 						'id' => [ 'required' => true, 'type' => 'integer', 'sanitize_callback' => 'absint' ],
 					],
@@ -183,15 +159,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				[
 					'methods' => WP_REST_Server::CREATABLE,
 					'callback' => [ $this, 'sort_subscription_plans' ],
-					'permission_callback' => function( $request ) {
-						$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
-						if ( $object_id && current_user_can( 'edit_post', $object_id ) ) {
-							return true;
-						}
-						return $this->check_permission( $request );
-					},
+					'permission_callback' => [ $this, 'authorize_subscription_object' ],
 					'args' => [
-						'object_id' => [ 'required' => true, 'type' => 'integer', 'sanitize_callback' => 'absint' ],
+						'object_id' => [ 'required' => true, 'type' => 'integer' ],
 						'ordered_ids' => [ 'required' => true, 'type' => 'array' ],
 					],
 				],
@@ -223,18 +193,14 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => $callback,
 					'permission_callback' => function( $request ) use ( $id_arg ) {
-						$id = (int) $request->get_param( $id_arg );
-						if ( $id && current_user_can( 'edit_post', $id ) ) {
-							return true;
-						}
-						return $this->check_permission( $request );
+						$source = 'bundle_id' === $id_arg ? 'editor_bundle' : 'editor_course';
+						return $this->authorize_subscription_object( $request, $source );
 					},
 					'args'                => [
 						$id_arg      => [ 'required' => true, 'type' => 'integer', 'sanitize_callback' => 'absint', 'description' => __( 'The ID of the course or bundle the plans belong to.', 'tutorpress-pmpro' ) ],
 						'plan_order' => [
 							'required'    => true,
 							'type'        => 'array',
-							'items'       => [ 'type' => 'integer' ],
 							'description' => __( 'Array of plan IDs in the desired order.', 'tutorpress-pmpro' ),
 						],
 					],
@@ -250,7 +216,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function sort_editor_course_plans( $request ) {
-		$request->set_param( 'object_id', $request->get_param( 'course_id' ) );
+		$url_params = $request->get_url_params();
+		$request->set_param( 'object_id', array_key_exists( 'course_id', $url_params ) ? $url_params['course_id'] : null );
 		$request->set_param( 'ordered_ids', $request->get_param( 'plan_order' ) );
 		return $this->sort_subscription_plans( $request );
 	}
@@ -262,7 +229,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function sort_editor_bundle_plans( $request ) {
-		$request->set_param( 'object_id', $request->get_param( 'bundle_id' ) );
+		$url_params = $request->get_url_params();
+		$request->set_param( 'object_id', array_key_exists( 'bundle_id', $url_params ) ? $url_params['bundle_id'] : null );
 		$request->set_param( 'ordered_ids', $request->get_param( 'plan_order' ) );
 		return $this->sort_subscription_plans( $request );
 	}
@@ -293,27 +261,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 
 		$plans = [];
-		// First try explicit course meta mapping
-		$mapped = get_post_meta( $course_id, '_tutorpress_pmpro_levels', true );
-		$level_ids = array();
-		if ( ! empty( $mapped ) && is_array( $mapped ) ) {
-			// mapped may be array of level IDs or associative plan_name=>level_id
-			foreach ( $mapped as $k => $v ) {
-				if ( is_numeric( $k ) ) {
-					$level_ids[] = (int) $v;
-				} else {
-					$level_ids[] = (int) $v;
-				}
-			}
-		} else {
-			// Fallback: scan all PMPro levels and find ones with level meta 'tutorpress_course_id' === $course_id
-			$all_levels = pmpro_getAllLevels( true, true );
-			foreach ( $all_levels as $lvl ) {
-				$assoc = get_pmpro_membership_level_meta( $lvl->id, 'tutorpress_course_id', true );
-				if ( $assoc && (int) $assoc === $course_id ) {
-					$level_ids[] = (int) $lvl->id;
-				}
-			}
+		$level_ids = $this->collect_subscription_level_ids( $course_id, 'tutorpress_course_id' );
+		if ( is_wp_error( $level_ids ) ) {
+			return $level_ids;
 		}
 
 		$level_ids = $this->filter_visible_level_ids( $course_id, $level_ids );
@@ -403,22 +353,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 
 		$plans = [];
-		// First attempt to read bundle mapping from post meta
-		$mapped = get_post_meta( $bundle_id, '_tutorpress_pmpro_levels', true );
-		$level_ids = array();
-		if ( ! empty( $mapped ) && is_array( $mapped ) ) {
-			foreach ( $mapped as $k => $v ) {
-				$level_ids[] = (int) ( is_numeric( $k ) ? $v : $v );
-			}
-		} else {
-			// Fallback: scan levels for 'tutorpress_bundle_id' meta
-			$all_levels = pmpro_getAllLevels( true, true );
-			foreach ( $all_levels as $lvl ) {
-				$assoc = get_pmpro_membership_level_meta( $lvl->id, 'tutorpress_bundle_id', true );
-				if ( $assoc && (int) $assoc === $bundle_id ) {
-					$level_ids[] = (int) $lvl->id;
-				}
-			}
+		$level_ids = $this->collect_subscription_level_ids( $bundle_id, 'tutorpress_bundle_id' );
+		if ( is_wp_error( $level_ids ) ) {
+			return $level_ids;
 		}
 
 		$level_ids = $this->filter_visible_level_ids( $bundle_id, $level_ids );
@@ -489,6 +426,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function create_subscription_plan( $request ) {
+		$authorized = $this->authorize_subscription_object( $request );
+		if ( is_wp_error( $authorized ) ) {
+			return $authorized;
+		}
+
 		// Ensure Tutor LMS
 		$tutor_check = $this->ensure_tutor_lms();
 		if ( is_wp_error( $tutor_check ) ) {
@@ -512,6 +454,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 
 		global $wpdb;
+
+		$recurring_limit = $this->validate_supplied_recurring_limit( $request );
+		if ( is_wp_error( $recurring_limit ) ) {
+			return $recurring_limit;
+		}
 
 		// Prepare level data mapping using mapper helper
 		$mapper = new \TutorPress_PMPro_Mapper();
@@ -605,7 +552,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				if ( $request->has_param( 'object_title' ) ) {
 					$group_title_override = sanitize_text_field( wp_unslash( (string) $request->get_param( 'object_title' ) ) );
 				}
-				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $level_id, $object_info['post_type'], $group_title_override );
+				if ( false === \TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $level_id, $object_info['post_type'], $group_title_override ) ) {
+					return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to map the membership level to its group.', 'tutorpress-pmpro' ), 'group_mapping_failed', 500 );
+				}
 			}
 
 			$meta_key = '_tutorpress_pmpro_levels';
@@ -674,6 +623,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function update_subscription_plan( $request ) {
+		$authorized = $this->authorize_subscription_object( $request );
+		if ( is_wp_error( $authorized ) ) {
+			return $authorized;
+		}
+
 		$plan_id = (int) $request->get_param( 'id' );
 		if ( ! $plan_id ) {
 			return new WP_Error( 'missing_id', __( 'Plan ID is required.', 'tutorpress-pmpro' ), [ 'status' => 400 ] );
@@ -688,7 +642,12 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return new WP_Error( 'level_not_found', __( 'PMPro level not found.', 'tutorpress-pmpro' ), [ 'status' => 404 ] );
 		}
 
-		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
+		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
+		$ownership = $this->validate_level_reverse_ownership( $plan_id, $object_id );
+		if ( is_wp_error( $ownership ) ) {
+			return $ownership;
+		}
+
 		$object_info = null;
 		if ( $object_id ) {
 			$object_info = $this->detect_object_type( $object_id );
@@ -710,6 +669,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 				return $blocked;
 			}
 		}
+		$recurring_limit = $this->validate_supplied_recurring_limit( $request );
+		if ( is_wp_error( $recurring_limit ) ) {
+			return $recurring_limit;
+		}
+
         // Normalize create/update semantics depending on payment_type
         $payment_type = $request->get_param( 'payment_type' );
         if ( 'one_time' === $payment_type ) {
@@ -728,6 +692,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
             // Recurring (renewal) payment should come from 'recurring_price' (billing_amount)
             if ( $request->has_param( 'recurring_price' ) ) {
                 $update_data['billing_amount'] = floatval( $request->get_param( 'recurring_price' ) );
+            }
+            if ( is_int( $recurring_limit ) ) {
+                $update_data['billing_limit'] = $recurring_limit;
             }
 
             // Ensure PMPro association row (pmpro_memberships_pages) exists for the course/bundle
@@ -759,8 +726,12 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		} else {
 			// Fallback: direct DB update (not ideal)
 			global $wpdb;
-			$result = $wpdb->update( $wpdb->pmpro_membership_levels, $update_data, [ 'id' => $plan_id ] );
-			$updated = $result !== false;
+			$format = array();
+			foreach ( $update_data as $value ) {
+				$format[] = is_int( $value ) ? '%d' : ( is_float( $value ) ? '%f' : '%s' );
+			}
+			$result = $wpdb->update( $wpdb->pmpro_membership_levels, $update_data, array( 'id' => $plan_id ), $format, array( '%d' ) );
+			$updated = false !== $result;
 			}
 		}
 
@@ -826,12 +797,18 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 	}
 
-	// Return the updated level using mapper
-	// Merge update_data with fetched level to ensure we have the latest values
-	// This prevents cache issues where pmpro_getLevel() might return stale data
-	$level = pmpro_getLevel( $plan_id );
-	$updated_level = (object) array_merge( (array) $level, $update_data );
-	$payload = $mapper->map_pmpro_to_ui( $updated_level );
+	global $wpdb;
+	$wpdb->last_error = '';
+	$persisted_level = $wpdb->get_row(
+		$wpdb->prepare(
+			"SELECT * FROM {$wpdb->pmpro_membership_levels} WHERE id = %d",
+			$plan_id
+		)
+	);
+	if ( '' !== $wpdb->last_error || null === $persisted_level ) {
+		return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to read the updated PMPro level.', 'tutorpress-pmpro' ), 'persisted_level_read_failed', 500 );
+	}
+	$payload = $mapper->map_pmpro_to_ui( $persisted_level );
 
 	return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $payload, __( 'PMPro membership level updated.', 'tutorpress-pmpro' ) ) );
 	}
@@ -843,16 +820,20 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function delete_subscription_plan( $request ) {
+		$authorized = $this->authorize_subscription_object( $request );
+		if ( is_wp_error( $authorized ) ) {
+			return $authorized;
+		}
+
 		$plan_id = (int) $request->get_param( 'id' );
 		if ( ! $plan_id ) {
 			return new WP_Error( 'missing_id', __( 'Plan ID is required.', 'tutorpress-pmpro' ), [ 'status' => 400 ] );
 		}
-		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) ); if ( ! $object_id ) { return new WP_Error( 'missing_object_id', __( 'Object ID is required (course_id or object_id).', 'tutorpress-pmpro' ), [ 'status' => 400 ] ); }
-		if ( ! current_user_can( 'edit_post', $object_id ) ) { return new WP_Error( 'rest_forbidden', __( 'You do not have permission to access this endpoint.', 'tutorpress-pmpro' ), [ 'status' => rest_authorization_required_code() ] ); }
+		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
 		$info = $this->detect_object_type( $object_id ); $validation = call_user_func( $info['validate'], $object_id ); if ( is_wp_error( $validation ) ) { return $validation; }
 		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) { require_once __DIR__ . '/../utilities/class-pmpro-level-cleanup.php'; }
 		$code = \TUTORPRESS_PMPRO\PMPro_Level_Removal_Coordinator::remove_level( $plan_id, $object_id );
-		if ( in_array( $code, array( 'ok', 'committed_with_warning', 'retired', 'unlinked' ), true ) ) {
+		if ( in_array( $code, array( 'ok', 'committed_with_warning' ), true ) ) {
 			return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( 'committed_with_warning' === $code ? array( 'warning' => true ) : null, __( 'PMPro membership level removed.', 'tutorpress-pmpro' ) ) );
 		}
 		$map = array( 'missing' => 404, 'protected' => 409, 'ineligible' => 409, 'ownership_conflict' => 409, 'busy' => 409, 'conflict' => 409 ); return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to delete PMPro level.', 'tutorpress-pmpro' ), $code, isset( $map[ $code ] ) ? $map[ $code ] : 500 );
@@ -865,6 +846,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function duplicate_subscription_plan( $request ) {
+		$authorized = $this->authorize_subscription_object( $request );
+		if ( is_wp_error( $authorized ) ) {
+			return $authorized;
+		}
+
 		$plan_id = (int) $request->get_param( 'id' );
 		if ( ! $plan_id ) {
 			return new WP_Error( 'missing_id', __( 'Plan ID is required.', 'tutorpress-pmpro' ), [ 'status' => 400 ] );
@@ -887,6 +873,11 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		$level = pmpro_getLevel( $plan_id );
 		if ( ! $level ) {
 			return new WP_Error( 'level_not_found', __( 'PMPro level not found.', 'tutorpress-pmpro' ), [ 'status' => 404 ] );
+		}
+
+		$ownership = $this->validate_level_reverse_ownership( $plan_id, (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) ) );
+		if ( is_wp_error( $ownership ) ) {
+			return $ownership;
 		}
 
 		// Prepare duplicated data
@@ -920,6 +911,26 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			$existing[] = $new_id;
 			update_post_meta( $object_id, $meta_key, array_values( array_unique( $existing ) ) );
 			if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
+				if ( function_exists( 'get_pmpro_membership_level_meta' ) ) {
+					$copied_meta_keys = array(
+						'provide_certificate',
+						'is_featured',
+						'sale_price',
+						'sale_price_from',
+						'sale_price_to',
+						'tutorpress_sale_price_from',
+						'tutorpress_sale_price_to',
+						'tutorpress_regular_price',
+						'tutorpress_sale_price',
+					);
+					foreach ( $copied_meta_keys as $copied_meta_key ) {
+						$stored_values = get_pmpro_membership_level_meta( $plan_id, $copied_meta_key );
+						if ( ! is_array( $stored_values ) || array() === $stored_values ) {
+							continue;
+						}
+						update_pmpro_membership_level_meta( $new_id, $copied_meta_key, $stored_values[0] );
+					}
+				}
 				update_pmpro_membership_level_meta( $new_id, $object_info['meta_key'], $object_id );
 				update_pmpro_membership_level_meta( $new_id, 'tutorpress_managed', 1 );
 			}
@@ -929,7 +940,9 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 			// Add to level group
 			if ( class_exists( '\\TUTORPRESS_PMPRO\\Init' ) ) {
-				\TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $new_id, $object_info['post_type'] );
+				if ( false === \TUTORPRESS_PMPRO\Init::add_level_to_course_group( $object_id, $new_id, $object_info['post_type'] ) ) {
+					return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to map the membership level to its group.', 'tutorpress-pmpro' ), 'group_mapping_failed', 500 );
+				}
 			}
 		}
 
@@ -941,12 +954,54 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 	}
 
 	/**
+	 * Normalize submitted sort IDs before merge.
+	 *
+	 * Accept a positive integer or a digit-only positive integer string.
+	 * Reject every other value, and reject duplicate IDs after normalization.
+	 *
+	 * @param array $ordered_ids Raw submitted IDs.
+	 * @return int[]|WP_Error
+	 */
+	private function normalize_submitted_plan_order( array $ordered_ids ) {
+		$normalized = array();
+		$seen       = array();
+
+		foreach ( $ordered_ids as $raw ) {
+			if ( is_int( $raw ) && $raw > 0 ) {
+				$id = $raw;
+			} elseif ( is_string( $raw ) && ctype_digit( $raw ) && (int) $raw > 0 ) {
+				$id = (int) $raw;
+			} else {
+				$id = 0;
+			}
+
+			if ( $id <= 0 || isset( $seen[ $id ] ) ) {
+				return new WP_Error(
+					'invalid_plan_order',
+					__( 'Plan order must contain distinct positive integer IDs.', 'tutorpress-pmpro' ),
+					array( 'status' => 400 )
+				);
+			}
+
+			$seen[ $id ]  = true;
+			$normalized[] = $id;
+		}
+
+		return $normalized;
+	}
+
+	/**
 	 * Sort subscription plans. Display order is stored in _tutorpress_pmpro_levels.
 	 *
 	 * @param WP_REST_Request $request
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function sort_subscription_plans( $request ) {
+		$authorized = $this->authorize_subscription_object( $request );
+		if ( is_wp_error( $authorized ) ) {
+			return $authorized;
+		}
+
 		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
 		$ordered_ids = $request->get_param( 'ordered_ids' );
 		if ( ! $object_id || ! is_array( $ordered_ids ) ) {
@@ -956,8 +1011,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		// Detect post type and get appropriate meta key
 		$object_info = $this->detect_object_type( $object_id );
 
-        // Sanitize IDs
-		$ordered_ids = array_values( array_filter( array_map( 'absint', $ordered_ids ) ) );
+		$ordered_ids = $this->normalize_submitted_plan_order( $ordered_ids );
+		if ( is_wp_error( $ordered_ids ) ) {
+			return $ordered_ids;
+		}
 
 		$read = \TUTORPRESS_PMPRO\PMPro_Level_Removal_State::get_object_state( $object_id );
 		if ( 'ok' !== $read['result'] ) {
@@ -969,6 +1026,12 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			$stored = array();
 		}
 		$merged = self::merge_display_order( $stored, $ordered_ids );
+		foreach ( $merged as $plan_id ) {
+			$ownership = $this->validate_level_reverse_ownership( $plan_id, $object_id );
+			if ( is_wp_error( $ownership ) ) {
+				return $ownership;
+			}
+		}
 		if ( array_map( 'intval', array_values( $stored ) ) !== $merged ) {
 			$written = update_post_meta( $object_id, '_tutorpress_pmpro_levels', $merged );
 			if ( ! $written ) {
@@ -982,17 +1045,64 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 
 		// Best-effort: ensure reverse meta (use appropriate meta key based on post type)
         if ( function_exists( 'update_pmpro_membership_level_meta' ) ) {
-			foreach ( $ordered_ids as $lid ) {
+			foreach ( $merged as $lid ) {
 				update_pmpro_membership_level_meta( $lid, $object_info['meta_key'], $object_id );
 			}
 		}
 
         // Sync associations to match the ordered IDs
         if ( class_exists( '\TUTORPRESS_PMPRO\PMPro_Association' ) ) {
-            \TUTORPRESS_PMPRO\PMPro_Association::sync_course_level_associations( $object_id, $ordered_ids );
+            \TUTORPRESS_PMPRO\PMPro_Association::sync_course_level_associations( $object_id, $merged );
         }
 
-		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $ordered_ids, __( 'Subscription plans reordered.', 'tutorpress-pmpro' ) ) );
+		return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( $merged, __( 'Subscription plans reordered.', 'tutorpress-pmpro' ) ) );
+	}
+
+	/**
+	 * Stored canonical IDs, then unique ascending reverse-only level IDs.
+	 *
+	 * @since 1.0.9
+	 *
+	 * @param int    $object_id   Course or bundle ID.
+	 * @param string $reverse_key Reverse ownership meta key.
+	 * @return int[]|WP_Error Candidate IDs, or a 500 database error.
+	 */
+	private function collect_subscription_level_ids( $object_id, $reverse_key ) {
+		global $wpdb;
+
+		$canonical = array();
+		$mapped    = get_post_meta( $object_id, '_tutorpress_pmpro_levels', true );
+		if ( is_array( $mapped ) && ! empty( $mapped ) ) {
+			foreach ( $mapped as $value ) {
+				$canonical[] = (int) $value;
+			}
+		}
+
+		$wpdb->last_error = '';
+		$rows             = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT levels.id FROM {$wpdb->pmpro_membership_levels} AS levels INNER JOIN {$wpdb->pmpro_membership_levelmeta} AS levelmeta ON levelmeta.pmpro_membership_level_id = levels.id WHERE levelmeta.meta_key = %s AND levelmeta.meta_value = %s ORDER BY levels.id ASC",
+				$reverse_key,
+				(string) (int) $object_id
+			)
+		);
+		if ( '' !== $wpdb->last_error ) {
+			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to retrieve PMPro membership levels.', 'tutorpress-pmpro' ), 'database_error', 500 );
+		}
+
+		$seen         = array_fill_keys( $canonical, true );
+		$reverse_only = array();
+		foreach ( (array) $rows as $row_id ) {
+			$id = (int) $row_id;
+			if ( isset( $seen[ $id ] ) ) {
+				continue;
+			}
+			$seen[ $id ]    = true;
+			$reverse_only[] = $id;
+		}
+		sort( $reverse_only, SORT_NUMERIC );
+
+		return array_merge( $canonical, $reverse_only );
 	}
 
 	/**
@@ -1038,6 +1148,137 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to update PMPro level.', 'tutorpress-pmpro' ), 'conflict', 409 );
 		}
 		return null;
+	}
+
+	/**
+	 * Validate a supplied recurring limit before mapping or writes.
+	 *
+	 * Omission returns null. A nonnegative integer or digit-only string returns
+	 * that integer. Any other supplied value is invalid.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return int|null|WP_Error
+	 */
+	private function validate_supplied_recurring_limit( $request ) {
+		if ( ! $request->has_param( 'recurring_limit' ) ) {
+			return null;
+		}
+
+		$params = $request->get_params();
+		$raw    = array_key_exists( 'recurring_limit', $params ) ? $params['recurring_limit'] : null;
+		if ( is_int( $raw ) && $raw >= 0 ) {
+			return $raw;
+		}
+		if ( is_string( $raw ) && '' !== $raw && ctype_digit( $raw ) ) {
+			return (int) $raw;
+		}
+
+		return new WP_Error(
+			'invalid_recurring_limit',
+			__( 'Recurring limit must be a nonnegative integer.', 'tutorpress-pmpro' ),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * Require the level's reverse key to match the accepted course or bundle.
+	 *
+	 * The object helper must already have accepted $object_id. This method does not write.
+	 *
+	 * @param int $plan_id   PMPro level ID.
+	 * @param int $object_id Accepted course or bundle ID.
+	 * @return true|WP_Error
+	 */
+	private function validate_level_reverse_ownership( $plan_id, $object_id ) {
+		if ( ! function_exists( 'pmpro_getLevel' ) || ! function_exists( 'get_pmpro_membership_level_meta' ) ) {
+			return TutorPress_Subscription_Utils::format_error_response( __( 'Paid Memberships Pro is not available.', 'tutorpress-pmpro' ), 'pmpro_not_available', 400 );
+		}
+		if ( ! pmpro_getLevel( $plan_id ) ) {
+			return new WP_Error( 'level_not_found', __( 'PMPro level not found.', 'tutorpress-pmpro' ), array( 'status' => 404 ) );
+		}
+
+		$post_type = get_post_type( $object_id );
+		if ( 'course-bundle' === $post_type ) {
+			$expected_key = 'tutorpress_bundle_id';
+			$opposite_key = 'tutorpress_course_id';
+		} elseif ( 'courses' === $post_type ) {
+			$expected_key = 'tutorpress_course_id';
+			$opposite_key = 'tutorpress_bundle_id';
+		} else {
+			return new WP_Error( 'invalid_course', __( 'Invalid course ID.', 'tutorpress' ), array( 'status' => 404 ) );
+		}
+
+		$expected = (int) get_pmpro_membership_level_meta( $plan_id, $expected_key, true );
+		$opposite = (int) get_pmpro_membership_level_meta( $plan_id, $opposite_key, true );
+		if ( $opposite > 0 || $expected !== (int) $object_id ) {
+			return new WP_Error(
+				'ownership_conflict',
+				__( 'This membership level does not belong to the supplied object.', 'tutorpress-pmpro' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Authorize one course or bundle for an object-scoped subscription write.
+	 *
+	 * Editor sources read the URL capture only and are not wired in this step.
+	 * Request and generic-sort resolution share one raw object_id ?? course_id.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param string          $source  request, editor_course, or editor_bundle.
+	 * @return true|WP_Error
+	 */
+	public function authorize_subscription_object( $request, $source = 'request' ) {
+		$object_id = (int) $this->resolve_subscription_object_id( $request, $source );
+		if ( $object_id <= 0 ) {
+			return new WP_Error(
+				'missing_object_id',
+				__( 'Object ID is required (course_id or object_id).', 'tutorpress-pmpro' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( 'editor_bundle' === $source ) {
+			$validation = TutorPress_Subscription_Utils::validate_bundle_id( $object_id );
+		} elseif ( 'editor_course' === $source ) {
+			$validation = TutorPress_Subscription_Utils::validate_course_id( $object_id );
+		} else {
+			$object_info = $this->detect_object_type( $object_id );
+			$validation  = call_user_func( $object_info['validate'], $object_id );
+		}
+		if ( is_wp_error( $validation ) ) {
+			return $validation;
+		}
+
+		if ( ! current_user_can( 'edit_post', $object_id ) ) {
+			return new WP_Error(
+				'rest_forbidden',
+				__( 'You do not have permission to access this endpoint.', 'tutorpress-pmpro' ),
+				array( 'status' => 403 )
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Resolve one raw object ID without absint().
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param string          $source  request, editor_course, or editor_bundle.
+	 * @return mixed Raw ID, or null when the selected parameter is absent.
+	 */
+	private function resolve_subscription_object_id( $request, $source ) {
+		if ( 'editor_course' === $source || 'editor_bundle' === $source ) {
+			$url_params = $request->get_url_params();
+			$key        = 'editor_course' === $source ? 'course_id' : 'bundle_id';
+			return array_key_exists( $key, $url_params ) ? $url_params[ $key ] : null;
+		}
+
+		return $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
 	}
 
 	/**

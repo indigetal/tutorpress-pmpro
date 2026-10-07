@@ -2038,7 +2038,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 					\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $course_id, $level_id );
 					
 					// Phase 5: Add level to course group
-					self::add_level_to_course_group( $course_id, $level_id, $post_type );
+					if ( false === self::add_level_to_course_group( $course_id, $level_id, $post_type ) ) {
+						return;
+					}
 					
 					// Handle sale price for the newly created one-time level
 					$this->handle_sale_price_for_one_time( $course_id, $level_id, $regular_price );
@@ -2533,17 +2535,19 @@ if ( ! defined( 'ABSPATH' ) ) {
 	 * @param int    $oid Course or bundle post ID.
 	 * @param int    $lid Newly inserted PMPro level ID.
 	 * @param string $pt  Post type (`courses` or `course-bundle`).
-	 * @return void
+	 * @return bool|void Bundle mapping result, or true when the course markers and course page read back.
 	 */
 	private function write_p10_new_insert_evidence( $oid, $lid, $pt ) {
 		$oid = (int) $oid; $lid = (int) $lid;
 		if ( $oid <= 0 || $lid <= 0 ) { return; }
-		$this->write_one_time_ownership_markers( $oid, $lid, $pt );
-		if ( 'course-bundle' === $pt ) { self::add_level_to_course_group( $oid, $lid, $pt ); return; }
+		$marked = $this->write_one_time_ownership_markers( $oid, $lid, $pt );
+		if ( 'course-bundle' === $pt ) { return self::add_level_to_course_group( $oid, $lid, $pt ); }
 		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Association' ) ) {
 			require_once $this->path . 'includes/utilities/class-pmpro-association.php';
 		}
 		\TUTORPRESS_PMPRO\PMPro_Association::ensure_course_level_association( $oid, $lid );
+		global $wpdb;
+		return $marked && (bool) $wpdb->get_var( $wpdb->prepare( "SELECT page_id FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d AND page_id = %d", $lid, $oid ) );
 	}
 
 	/**
@@ -2625,7 +2629,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 		} elseif ( array() === (array) $disc['marked_one_time_ids'] ) {
 			$lid = $this->insert_one_time_level( $object_id );
 			if ( $lid && $this->append_current_pmpro_level_meta( $object_id, $lid ) ) {
-				$this->write_p10_new_insert_evidence( $object_id, $lid, $post_type );
+				$evidence = $this->write_p10_new_insert_evidence( $object_id, $lid, $post_type );
+				if ( 'courses' !== $post_type || true !== $evidence ) {
+					return;
+				}
+				if ( false === $this->set_one_time_sale_pricing( $object_id, $lid, floatval( $regular_price ) ) ) {
+					return;
+				}
 			}
 		}
 	}
@@ -2835,70 +2845,96 @@ if ( ! defined( 'ABSPATH' ) ) {
 			return false;
 		}
 
-		// Check if level is already in a group (PMPro doesn't allow levels in multiple groups)
 		global $wpdb;
-		$groups_levels_table = $wpdb->prefix . 'pmpro_membership_levels_groups';
-		$existing_group = $wpdb->get_var( $wpdb->prepare(
-			"SELECT `group` FROM {$groups_levels_table} WHERE level = %d LIMIT 1",
-			$level_id
+		$mapping_table = $wpdb->pmpro_membership_levels_groups;
+		$pair_ids = $wpdb->get_col( $wpdb->prepare(
+			"SELECT id FROM {$mapping_table} WHERE level = %d AND `group` = %d ORDER BY id ASC",
+			$level_id,
+			$group_id
 		) );
-		
+		if ( ! is_array( $pair_ids ) || '' !== $wpdb->last_error ) {
+			return false;
+		}
+
 		$object_label = ( 'course-bundle' === $post_type ) ? 'bundle' : 'course';
-		
-		if ( $existing_group && (int) $existing_group === (int) $group_id ) {
-			// Already in the correct group
+
+		if ( ! $pair_ids ) {
+			pmpro_add_level_to_group( $level_id, $group_id );
+
+			$pair_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT id FROM {$mapping_table} WHERE level = %d AND `group` = %d ORDER BY id ASC",
+				$level_id,
+				$group_id
+			) );
+			if ( ! is_array( $pair_ids ) || '' !== $wpdb->last_error ) {
+				return false;
+			}
+
+			if ( ! $pair_ids ) {
+				$inserted = $wpdb->insert(
+					$mapping_table,
+					array(
+						'group' => (int) $group_id,
+						'level' => (int) $level_id,
+					),
+					array( '%d', '%d' )
+				);
+				if ( false === $inserted || '' !== $wpdb->last_error ) {
+					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+						$wpdb_error = $wpdb->last_error ? $wpdb->last_error : 'none';
+						error_log( '[TP-PMPRO] add_level_to_course_group FAILED (direct insert also failed); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() . ' wpdb_error=' . $wpdb_error );
+					}
+					return false;
+				}
+
+				$pair_ids = $wpdb->get_col( $wpdb->prepare(
+					"SELECT id FROM {$mapping_table} WHERE level = %d AND `group` = %d ORDER BY id ASC",
+					$level_id,
+					$group_id
+				) );
+				if ( ! is_array( $pair_ids ) || '' !== $wpdb->last_error || ! $pair_ids ) {
+					return false;
+				}
+
+				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+					error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS (fallback direct insert); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
+				}
+			} elseif ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
+				error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS; level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
+			}
+		}
+
+		if ( $pair_ids ) {
+			$retained_id = (int) array_shift( $pair_ids );
+			foreach ( $pair_ids as $duplicate_id ) {
+				$deleted = $wpdb->delete(
+					$mapping_table,
+					array(
+						'id'    => (int) $duplicate_id,
+						'level' => (int) $level_id,
+						'group' => (int) $group_id,
+					),
+					array( '%d', '%d', '%d' )
+				);
+				if ( false === $deleted || '' !== $wpdb->last_error ) {
+					return false;
+				}
+			}
+
+			$verified_ids = $wpdb->get_col( $wpdb->prepare(
+				"SELECT id FROM {$mapping_table} WHERE level = %d AND `group` = %d ORDER BY id ASC",
+				$level_id,
+				$group_id
+			) );
+			if ( ! is_array( $verified_ids ) || '' !== $wpdb->last_error || array( $retained_id ) !== array_map( 'intval', $verified_ids ) ) {
+				return false;
+			}
+
 			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
 				error_log( '[TP-PMPRO] add_level_to_course_group already in group; level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id );
 		}
 			return true;
 		}
-		
-		// Add level to group using PMPro's function
-		$result = pmpro_add_level_to_group( $level_id, $group_id );
-		
-		// If PMPro function failed, try direct database insert as fallback
-		if ( ! $result ) {
-			// Verify the group exists first
-			$groups_table = $wpdb->prefix . 'pmpro_groups';
-			$group_exists = $wpdb->get_var( $wpdb->prepare(
-				"SELECT id FROM {$groups_table} WHERE id = %d",
-				$group_id
-			) );
-			
-			if ( $group_exists ) {
-				// Direct insert as fallback
-				$inserted = $wpdb->insert(
-					$groups_levels_table,
-					array(
-						'group' => $group_id,
-						'level' => $level_id,
-					),
-					array( '%d', '%d' )
-				);
-				
-				if ( $inserted ) {
-					$result = true;
-					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-						error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS (fallback direct insert); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
-					}
-				} else {
-					if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-						$wpdb_error = $wpdb->last_error ? $wpdb->last_error : 'none';
-						error_log( '[TP-PMPRO] add_level_to_course_group FAILED (direct insert also failed); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() . ' wpdb_error=' . $wpdb_error );
-					}
-				}
-			} else {
-				if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-					error_log( '[TP-PMPRO] add_level_to_course_group FAILED (group does not exist); level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
-				}
-			}
-		} else {
-			if ( defined( 'TP_PMPRO_LOG' ) && TP_PMPRO_LOG ) {
-				error_log( '[TP-PMPRO] add_level_to_course_group SUCCESS; level=' . $level_id . ' group=' . $group_id . ' ' . $object_label . '=' . $object_id . ' blog_id=' . get_current_blog_id() );
-			}
-		}
-		
-		return (bool) $result;
 	}
 
 

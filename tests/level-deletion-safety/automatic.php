@@ -4,11 +4,19 @@ function tutorpress_pmpro_lds_unhook_p20_shutdown() {
 	$pairs = array( array( 'rest_after_insert_courses', 20, 'reconcile_course_levels_rest' ), array( 'rest_after_insert_course-bundle', 20, 'reconcile_bundle_levels_rest' ), array( 'save_post_courses', 999, 'schedule_reconcile_course_levels' ), array( 'save_post_course-bundle', 999, 'schedule_reconcile_bundle_levels' ) );
 	foreach ( $pairs as $x ) { foreach ( (array) ( $GLOBALS['wp_filter'][ $x[0] ]->callbacks[ $x[1] ] ?? array() ) as $h ) { if ( is_array( $h['function'] ) && $h['function'][0] instanceof \TUTORPRESS_PMPRO\Init && $x[2] === $h['function'][1] ) { remove_action( $x[0], $h['function'], $x[1] ); } } }
 }
-$lid = 980000000 + (int) getmypid(); $a = $lid + 1; $e = $lid + 2; $f = $lid + 3; $b = $lid + 4; $g = $lid + 5; $h = $lid + 6; $j = $lid + 7; $nid = 0; $nid2 = 0; $p10id = 0; $p10bid = 0; $p10nid = 0; $p20fn = null;
+$lid = 980000000 + (int) getmypid(); $a = $lid + 1; $e = $lid + 2; $f = $lid + 3; $b = $lid + 4; $g = $lid + 5; $h = $lid + 6; $j = $lid + 7; $nid = 0; $nid2 = 0; $p10id = 0; $p10bid = 0; $p10nid = 0; $ns15 = 0; $vs15 = 0; $p20fn = null;
+$tutorpress_pmpro_lds_failed = false;
+$tutorpress_pmpro_lds_automatic_cleanup = function () use ( &$tutorpress_pmpro_lds_failed, &$p20fn, &$nid, &$nid2, &$p10id, &$p10bid, &$p10nid, &$ns15, &$vs15, $lid, $a, $e, $g, $h, $j ) {
+	tutorpress_pmpro_lds_unhook_p20_shutdown();
+	delete_transient( 'tp_pmpro_lock_' . ( $lid + 37 ) );
+	delete_transient( 'tp_pmpro_lock_' . ( $lid + 39 ) );
+	if ( $p20fn ) { remove_action( 'tutorpress_pmpro_level_deletion_blocked', $p20fn ); } global $wpdb; foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; } $c = '\\TUTORPRESS_PMPRO\\PMPro_Level_Deletion_Coordinator'; $c::disarm_shutdown_guard(); $c::restore_deletion_listener(); unset( $GLOBALS['tutorpress_pmpro_lds_lock'], $GLOBALS['tutorpress_pmpro_lds_unlock'], $GLOBALS['tutorpress_pmpro_lds_in_txn'], $GLOBALS['tutorpress_pmpro_lds_txn'], $GLOBALS['tutorpress_pmpro_lds_cache_false'] ); delete_transient( 'tp_pmpro_lock_' . $h ); delete_transient( 'tp_pmpro_lock_bundle_' . $h ); delete_transient( 'tp_pmpro_lock_bundle_' . ( $lid + 33 ) ); $hg = (int) get_post_meta( $h, '_tutorpress_pmpro_group_id', true ); $kg = (int) get_post_meta( $lid + 8, '_tutorpress_pmpro_group_id', true ); delete_post_meta( $h, '_tutorpress_pmpro_levels' ); delete_post_meta( $h, 'tutor_course_selling_option' ); delete_post_meta( $h, '_tutor_course_price_type' ); delete_post_meta( $h, 'tutor_course_price' ); delete_post_meta( $h, '_tutorpress_pmpro_group_id' ); delete_post_meta( $lid + 8, '_tutor_course_price_type' ); delete_post_meta( $lid + 8, 'tutor_course_sale_price' ); delete_post_meta( $lid + 8, 'tutor_course_selling_option' ); delete_post_meta( $lid + 8, 'tutor_course_price' ); delete_post_meta( $lid + 8, '_tutorpress_pmpro_group_id' ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_users} WHERE membership_id IN ( %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )", $e, $lid + 13, $lid + 14, $lid + 15, $lid + 16, $lid + 17, $p10id, $p10bid, $p10nid, $lid + 26 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels} WHERE id IN ( %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )", $e, $g, $j, $lid + 12, $lid + 13, $lid + 14, $lid + 15, $lid + 16, $lid + 17, $nid, $nid2, $p10id, $p10bid, $lid + 18, $p10nid, $lid + 20, $lid + 21, $lid + 22, $lid + 24, $lid + 26, $lid + 28, $lid + 29, $lid + 31, $lid + 32, $lid + 34, $lid + 35, $lid + 38, $lid + 40, $lid + 41, $lid + 43, $lid + 44, $lid + 45, $lid + 46, $ns15, $vs15, $lid + 52 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id IN ( %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )", $e, $g, $j, $lid + 12, $lid + 14, $lid + 15, $lid + 16, $lid + 17, $nid, $nid2, $p10id, $p10bid, $lid + 18, $p10nid, $lid + 28, $lid + 29, $lid + 32, $lid + 35, $lid + 38, $lid + 40, $lid + 46, $ns15, $vs15, $lid + 52 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE page_id IN ( %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )", $a, $h, $lid + 8, $lid + 27, $lid + 30, $lid + 37, $lid + 39, $lid + 49, $lid + 50, $lid + 51 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_groups} WHERE id IN ( %d, %d, %d, %d, %d, %d )", $lid + 11, $hg, $kg, $lid + 36, $lid + 47, $lid + 48 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels_groups} WHERE `group` IN ( %d, %d, %d, %d, %d, %d )", $lid + 11, $hg, $kg, $lid + 36, $lid + 47, $lid + 48 ) ); tutorpress_pmpro_lds_cleanup();
+	if ( '' !== (string) $wpdb->last_error ) { $tutorpress_pmpro_lds_failed = true; }
+};
 try {
 	tutorpress_pmpro_lds_require_local_site(); $i = ( new ReflectionClass( '\\TUTORPRESS_PMPRO\\Init' ) )->newInstanceWithoutConstructor(); $d = function( $id, $m ) use ( $i ) { return $i->discover_pmpro_levels( $id, $m ); }; $inc = function( $r ) { return ! empty( $r['incomplete'] ) && array() === $r['ids'] && array() === $r['stale_ids']; };
 	tutorpress_pmpro_lds_assert( $inc( $d( 1, '' ) ) && $inc( $d( 1, 'nope' ) ), 'unknown-mode' );
-	global $wpdb; tutorpress_pmpro_lds_assert( $a === (int) wp_insert_post( array( 'import_id' => $a, 'post_type' => 'courses', 'post_status' => 'publish', 'post_title' => 'tp11a1-' . $a ) ), 'post' ); $GLOBALS['tutorpress_pmpro_lds_reg']['posts'][] = $a; if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
+	global $wpdb; tutorpress_pmpro_lds_assert( $a === (int) wp_insert_post( array( 'import_id' => $a, 'post_type' => 'courses', 'post_status' => 'publish', 'post_title' => 'tp11a1-' . $a ) ), 'post' ); $GLOBALS['tutorpress_pmpro_lds_reg']['posts'][] = $a; if ( '1' === getenv( 'TUTORPRESS_PMPRO_LDS_FORCE_AUTOMATIC_FAILURE' ) ) { tutorpress_pmpro_lds_assert( false, 'automatic-forced-failure' ); } if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
 	$wpdb->last_error = 'leftover'; $r = $d( $a, 'permanent_course' ); tutorpress_pmpro_lds_assert( empty( $r['incomplete'] ) && array() === $r['ids'] && array() === $r['stale_ids'] && array() === $r['rows'], 'empty' );
 	$lm = $wpdb->pmpro_membership_levelmeta; $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb']['pmpro_membership_levelmeta'] = $lm; $wpdb->insert( $wpdb->pmpro_membership_levels, array( 'id' => $e, 'name' => 'tp11a1-' . $e, 'description' => '', 'confirmation' => '', 'initial_payment' => 0, 'billing_amount' => 0, 'cycle_number' => 0, 'cycle_period' => '', 'billing_limit' => 0, 'trial_amount' => 0, 'trial_limit' => 0, 'allow_signups' => 0 ) ); $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $e, 'meta_key' => 'tutorpress_course_id', 'meta_value' => (string) $a ) ); unset( $wpdb->pmpro_membership_levelmeta ); $r = $d( $a, 'permanent_course' ); tutorpress_pmpro_lds_assert( empty( $r['incomplete'] ) && ! in_array( $e, $r['ids'], true ) && ! in_array( $e, $r['stale_ids'], true ), 'rev-excl' ); $wpdb->pmpro_membership_levelmeta = $lm;
 	$wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e, 'page_id' => $a ) ); $wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $e, 'page_id' => $a ) ); $wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => 0, 'page_id' => $a ) ); update_post_meta( $a, '_tutorpress_pmpro_levels', array( $e, $e, -1, 0, $f ) ); $r = $d( $a, 'permanent_course' ); tutorpress_pmpro_lds_assert( empty( $r['incomplete'] ) && array( $e, $f ) === $r['ids'] && array( $f ) === $r['stale_ids'] && isset( $r['rows'][ $e ]['id'], $r['rows'][ $e ]['billing_amount'], $r['rows'][ $e ]['cycle_number'] ) && ! isset( $r['rows'][ $f ] ), 'union' );
@@ -151,8 +159,8 @@ try {
 	tutorpress_pmpro_lds_unhook_p20_shutdown(); $ncap = count( $cap );
 	update_post_meta( $a, 'tutor_course_selling_option', 'one_time' ); update_post_meta( $a, 'tutor_course_price', 0 ); $wpdb->insert( $wpdb->pmpro_membership_levels, array( 'id' => $y, 'name' => 'tp14b3-' . $y, 'description' => '', 'confirmation' => '', 'initial_payment' => 0, 'billing_amount' => 5, 'cycle_number' => 1, 'cycle_period' => 'Month', 'billing_limit' => 0, 'trial_amount' => 0, 'trial_limit' => 0, 'allow_signups' => 0 ) ); $wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $y, 'page_id' => $a ) ); $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $y, 'meta_key' => 'tutorpress_managed', 'meta_value' => '1' ) ); $wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $y, 'meta_key' => 'tutorpress_course_id', 'meta_value' => (string) $a ) ); update_post_meta( $a, '_tutorpress_pmpro_levels', array( $p10id, $y ) ); $inv( 'auto_create_one_time_level', $a, 'course' ); tutorpress_pmpro_lds_assert( (string) $y === (string) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $y ) ) && array( $p10id, $y ) === array_map( 'intval', (array) get_post_meta( $a, '_tutorpress_pmpro_levels', true ) ), 'price' );
 	update_post_meta( $a, 'tutor_course_price', 9 ); update_post_meta( $a, '_tutorpress_pmpro_levels', array( $e, $p10id ) ); $inv( 'auto_create_one_time_level', $a, 'course' ); tutorpress_pmpro_lds_assert( '1' !== (string) get_pmpro_membership_level_meta( $e, 'tutorpress_managed', true ) && array( $e, $p10id ) === array_map( 'intval', (array) get_post_meta( $a, '_tutorpress_pmpro_levels', true ) ) && (string) $p10id === (string) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $p10id ) ), 'no-adopt' );
-	update_post_meta( $a, '_tutorpress_pmpro_levels', array( $lid + 3 ) ); $inv( 'auto_create_one_time_level', $a, 'course' ); if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); } $diff = array_values( array_diff( array_map( 'intval', (array) get_post_meta( $a, '_tutorpress_pmpro_levels', true ) ), array( $lid + 3 ) ) ); $p10nid = (int) ( $diff[0] ?? 0 ); tutorpress_pmpro_lds_assert( $p10nid > 0 && in_array( $lid + 3, array_map( 'intval', (array) get_post_meta( $a, '_tutorpress_pmpro_levels', true ) ), true ) && '1' === (string) get_pmpro_membership_level_meta( $p10nid, 'tutorpress_managed', true ) && (string) $a === (string) $wpdb->get_var( $wpdb->prepare( "SELECT page_id FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d AND page_id = %d", $p10nid, $a ) ) && 0.0 === (float) $wpdb->get_var( $wpdb->prepare( "SELECT initial_payment FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $p10nid ) ) && $ncap === count( $cap ), 'ot-p10' );
-	tutorpress_pmpro_lds_assert( false === strpos( $src, 'remove_associations_for_level' ) && false === strpos( $src, '$wpdb->delete' ) && false === strpos( $src, '$wpdb->update' ) && false === strpos( $src, '$wpdb->insert' ) && false !== strpos( $src, 'append_current_pmpro_level_meta' ) && false !== strpos( $src, 'update_one_time_survivor_level' ) && false !== strpos( $src, 'insert_one_time_level' ) && false === strpos( $src, 'set_one_time_sale_pricing' ) && false === strpos( $src, 'set_one_time_bundle_pricing' ) && $ncap === count( $cap ), '14b3-src' );
+	update_post_meta( $a, '_tutorpress_pmpro_levels', array( $lid + 3 ) ); $inv( 'auto_create_one_time_level', $a, 'course' ); if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); } $diff = array_values( array_diff( array_map( 'intval', (array) get_post_meta( $a, '_tutorpress_pmpro_levels', true ) ), array( $lid + 3 ) ) ); $p10nid = (int) ( $diff[0] ?? 0 ); tutorpress_pmpro_lds_assert( $p10nid > 0 && in_array( $lid + 3, array_map( 'intval', (array) get_post_meta( $a, '_tutorpress_pmpro_levels', true ) ), true ) && '1' === (string) get_pmpro_membership_level_meta( $p10nid, 'tutorpress_managed', true ) && (string) $a === (string) $wpdb->get_var( $wpdb->prepare( "SELECT page_id FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d AND page_id = %d", $p10nid, $a ) ) && 9.0 === (float) $wpdb->get_var( $wpdb->prepare( "SELECT initial_payment FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $p10nid ) ) && $ncap === count( $cap ), 'ot-p10' );
+	tutorpress_pmpro_lds_assert( false === strpos( $src, 'remove_associations_for_level' ) && false === strpos( $src, '$wpdb->delete' ) && false === strpos( $src, '$wpdb->update' ) && false === strpos( $src, '$wpdb->insert' ) && false !== strpos( $src, 'append_current_pmpro_level_meta' ) && false !== strpos( $src, 'update_one_time_survivor_level' ) && false !== strpos( $src, 'insert_one_time_level' ) && false !== strpos( $src, 'set_one_time_sale_pricing' ) && false === strpos( $src, 'set_one_time_bundle_pricing' ) && $ncap === count( $cap ), '14b3-src' );
 	tutorpress_pmpro_lds_pass( '14B3' );
 	tutorpress_pmpro_lds_unhook_p20_shutdown(); $n15 = count( $cap ); $st = array( 'stale_ids' => array( $lid + 3, $n ) );
 	$wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $lid + 3, 'page_id' => $h ) ); $wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $n, 'page_id' => $h ) ); update_post_meta( $h, '_tutorpress_pmpro_levels', array( $lid + 3, $w ) ); update_post_meta( $h, '_tutor_course_price_type', 'free' ); $wpdb->insert( $wpdb->pmpro_memberships_users, array( 'user_id' => 0, 'membership_id' => $w, 'status' => 'active', 'code_id' => 0, 'initial_payment' => 0, 'billing_amount' => 0, 'cycle_number' => 0, 'cycle_period' => 'Month', 'billing_limit' => 0, 'trial_amount' => 0, 'trial_limit' => 0, 'startdate' => '2000-01-01 00:00:00' ) ); $i->reconcile_course_levels( $h ); tutorpress_pmpro_lds_assert( $n15 + 1 === count( $cap ) && 'preflight_halt' === $cap[ $n15 ]['reason'] && 1 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d AND page_id = %d", $lid + 3, $h ) ) && (string) $w === (string) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $w ) ) && (string) $e === (string) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $e ) ), 'live-gate' );
@@ -305,4 +313,150 @@ try {
 	$i->maybe_reconcile_on_status( 'draft', 'publish', $course );
 	tutorpress_pmpro_lds_assert( $okmap() && '0' === (string) $wpdb->get_var( $wpdb->prepare( "SELECT allow_signups FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $o12e ) ) && '0' === (string) $wpdb->get_var( $wpdb->prepare( "SELECT allow_signups FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $u12e ) ), '12d2-unpub' );
 	tutorpress_pmpro_lds_pass( '12D2' );
-} catch ( Throwable $ex ) { fwrite( STDERR, $ex->getMessage() . ' ' . $ex->getFile() . ':' . $ex->getLine() . "\n" ); exit( 1 ); } finally { if ( $p20fn ) { remove_action( 'tutorpress_pmpro_level_deletion_blocked', $p20fn ); } global $wpdb; foreach ( $GLOBALS['tutorpress_pmpro_lds_reg']['wpdb'] as $p => $v ) { $wpdb->$p = $v; } $c = '\\TUTORPRESS_PMPRO\\PMPro_Level_Deletion_Coordinator'; $c::disarm_shutdown_guard(); $c::restore_deletion_listener(); unset( $GLOBALS['tutorpress_pmpro_lds_lock'], $GLOBALS['tutorpress_pmpro_lds_unlock'], $GLOBALS['tutorpress_pmpro_lds_in_txn'], $GLOBALS['tutorpress_pmpro_lds_txn'], $GLOBALS['tutorpress_pmpro_lds_cache_false'] ); delete_transient( 'tp_pmpro_lock_' . $h ); delete_transient( 'tp_pmpro_lock_bundle_' . $h ); delete_transient( 'tp_pmpro_lock_bundle_' . ( $lid + 33 ) ); $hg = (int) get_post_meta( $h, '_tutorpress_pmpro_group_id', true ); $kg = (int) get_post_meta( $lid + 8, '_tutorpress_pmpro_group_id', true ); delete_post_meta( $h, '_tutorpress_pmpro_levels' ); delete_post_meta( $h, 'tutor_course_selling_option' ); delete_post_meta( $h, '_tutor_course_price_type' ); delete_post_meta( $h, 'tutor_course_price' ); delete_post_meta( $h, '_tutorpress_pmpro_group_id' ); delete_post_meta( $lid + 8, '_tutor_course_price_type' ); delete_post_meta( $lid + 8, 'tutor_course_sale_price' ); delete_post_meta( $lid + 8, 'tutor_course_selling_option' ); delete_post_meta( $lid + 8, 'tutor_course_price' ); delete_post_meta( $lid + 8, '_tutorpress_pmpro_group_id' ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_users} WHERE membership_id IN ( %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )", $e, $lid + 13, $lid + 14, $lid + 15, $lid + 16, $lid + 17, $p10id, $p10bid, $p10nid, $lid + 26 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels} WHERE id IN ( %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )", $e, $g, $j, $lid + 12, $lid + 13, $lid + 14, $lid + 15, $lid + 16, $lid + 17, $nid, $nid2, $p10id, $p10bid, $lid + 18, $p10nid, $lid + 20, $lid + 21, $lid + 22, $lid + 24, $lid + 26, $lid + 28, $lid + 29, $lid + 31, $lid + 32, $lid + 34, $lid + 35, $lid + 38, $lid + 40, $lid + 41 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id IN ( %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d )", $e, $g, $j, $lid + 12, $lid + 14, $lid + 15, $lid + 16, $lid + 17, $nid, $nid2, $p10id, $p10bid, $lid + 18, $p10nid, $lid + 28, $lid + 29, $lid + 32, $lid + 35, $lid + 38, $lid + 40 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_memberships_pages} WHERE page_id IN ( %d, %d, %d, %d, %d, %d, %d )", $a, $h, $lid + 8, $lid + 27, $lid + 30, $lid + 37, $lid + 39 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_groups} WHERE id IN ( %d, %d, %d, %d )", $lid + 11, $hg, $kg, $lid + 36 ) ); $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->pmpro_membership_levels_groups} WHERE `group` IN ( %d, %d, %d, %d )", $lid + 11, $hg, $kg, $lid + 36 ) ); tutorpress_pmpro_lds_cleanup(); }
+	$p15 = $lid + 42; $lv_ins = $lid + 43; $lv_fb = $lid + 44; $lv_dup = $lid + 45; $lv_oth = $lid + 46; $g_tgt = $lid + 47; $g_oth = $lid + 48;
+	tutorpress_pmpro_lds_assert( $p15 === (int) wp_insert_post( array( 'import_id' => $p15, 'post_type' => 'courses', 'post_status' => 'publish', 'post_title' => 'tp15a-' . $p15 ) ), '15a-post' ); $GLOBALS['tutorpress_pmpro_lds_reg']['posts'][] = $p15; if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
+	$wpdb->insert( $wpdb->pmpro_groups, array( 'id' => $g_tgt, 'name' => 'tp15a-' . $g_tgt ) ); $wpdb->insert( $wpdb->pmpro_groups, array( 'id' => $g_oth, 'name' => 'tp15a-' . $g_oth ) );
+	foreach ( array( $lv_ins, $lv_fb, $lv_dup, $lv_oth ) as $lv15 ) { $wpdb->insert( $wpdb->pmpro_membership_levels, array( 'id' => $lv15, 'name' => 'tp15a-' . $lv15, 'description' => '', 'confirmation' => '', 'initial_payment' => 0, 'billing_amount' => 0, 'cycle_number' => 0, 'cycle_period' => '', 'billing_limit' => 0, 'trial_amount' => 0, 'trial_limit' => 0, 'allow_signups' => 0 ) ); }
+	update_post_meta( $p15, '_tutorpress_pmpro_group_id', $g_tgt );
+	$wpdb->insert( $wpdb->pmpro_membership_levels_groups, array( 'group' => $g_tgt, 'level' => $lv_dup ) ); $lo = (int) $wpdb->insert_id; $wpdb->insert( $wpdb->pmpro_membership_levels_groups, array( 'group' => $g_tgt, 'level' => $lv_dup ) ); $hi = (int) $wpdb->insert_id; $wpdb->insert( $wpdb->pmpro_membership_levels_groups, array( 'group' => $g_oth, 'level' => $lv_dup ) ); $oid = (int) $wpdb->insert_id; $wpdb->insert( $wpdb->pmpro_membership_levels_groups, array( 'group' => $g_tgt, 'level' => $lv_oth ) ); $xid = (int) $wpdb->insert_id; if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
+	$dup = $inv( 'add_level_to_course_group', $p15, $lv_dup, 'courses', null ); $kept = array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$wpdb->pmpro_membership_levels_groups} WHERE level = %d AND `group` = %d ORDER BY id ASC", $lv_dup, $g_tgt ) ) ); tutorpress_pmpro_lds_assert( true === $dup && $lo > 0 && $hi > $lo && array( $lo ) === $kept && 0 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_membership_levels_groups} WHERE id = %d", $hi ) ) && 1 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_membership_levels_groups} WHERE id = %d AND level = %d AND `group` = %d", $oid, $lv_dup, $g_oth ) ) && 1 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_membership_levels_groups} WHERE id = %d AND level = %d AND `group` = %d", $xid, $lv_oth, $g_tgt ) ), '15a-dup' );
+	$one = $inv( 'add_level_to_course_group', $p15, $lv_ins, 'courses', null ); tutorpress_pmpro_lds_assert( true === $one && 1 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_membership_levels_groups} WHERE level = %d AND `group` = %d", $lv_ins, $g_tgt ) ), '15a-one' );
+	$seen = 0; $fn = function( $sql ) use ( &$seen, $lv_fb, $g_tgt ) { if ( $seen || false === stripos( $sql, 'insert' ) || false === strpos( $sql, 'pmpro_membership_levels_groups' ) || false === strpos( $sql, (string) $lv_fb ) || false === strpos( $sql, (string) $g_tgt ) ) { return $sql; } $seen = 1; return 'SELECT 1'; }; $GLOBALS['tutorpress_pmpro_lds_reg']['hooks'][] = array( 'query', $fn ); add_filter( 'query', $fn ); $wpdb->last_error = ''; $fb = $inv( 'add_level_to_course_group', $p15, $lv_fb, 'courses', null ); remove_filter( 'query', $fn ); $wpdb->last_error = ''; tutorpress_pmpro_lds_assert( true === $fb && 1 === $seen && 1 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_membership_levels_groups} WHERE level = %d AND `group` = %d", $lv_fb, $g_tgt ) ), '15a-fb' );
+	tutorpress_pmpro_lds_pass( '15A' );
+	$tp15b_map = $wpdb->pmpro_membership_levels_groups;
+	$tp15b_fail = 'SELECT 1 FROM tp_lds_missing_15b';
+	$tp15b_has = function ( $sql, $level, $group ) use ( $tp15b_map ) {
+		return false !== strpos( $sql, $tp15b_map ) && false !== strpos( $sql, (string) (int) $level ) && false !== strpos( $sql, (string) (int) $group );
+	};
+	$tp15b_run = function ( $fn, $level ) use ( $inv, $p15, $wpdb ) {
+		$GLOBALS['tutorpress_pmpro_lds_reg']['hooks'][] = array( 'query', $fn );
+		add_filter( 'query', $fn );
+		$wpdb->last_error = '';
+		$result = $inv( 'add_level_to_course_group', $p15, $level, 'courses', null );
+		remove_filter( 'query', $fn );
+		$wpdb->last_error = '';
+		return $result;
+	};
+	$tp15b_seen = 0;
+	$tp15b_pre = function ( $sql ) use ( &$tp15b_seen, $tp15b_has, $lv_oth, $g_tgt, $tp15b_fail ) {
+		if ( $tp15b_seen || false === stripos( $sql, 'select' ) || ! $tp15b_has( $sql, $lv_oth, $g_tgt ) ) { return $sql; }
+		$tp15b_seen = 1;
+		return $tp15b_fail;
+	};
+	tutorpress_pmpro_lds_assert( false === $tp15b_run( $tp15b_pre, $lv_oth ) && 1 === $tp15b_seen, '15b-pre' );
+	$wpdb->delete( $tp15b_map, array( 'level' => (int) $lv_fb, 'group' => (int) $g_tgt ), array( '%d', '%d' ) );
+	tutorpress_pmpro_lds_assert( '' === $wpdb->last_error && '0' === (string) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$tp15b_map} WHERE level = %d AND `group` = %d", $lv_fb, $g_tgt ) ), '15b-fb-absent' );
+	$tp15b_seen = 0;
+	$tp15b_fb = function ( $sql ) use ( &$tp15b_seen, $tp15b_has, $lv_fb, $g_tgt, $tp15b_fail ) {
+		if ( $tp15b_seen > 1 || false === stripos( $sql, 'insert' ) || ! $tp15b_has( $sql, $lv_fb, $g_tgt ) ) { return $sql; }
+		++$tp15b_seen;
+		return 1 === $tp15b_seen ? 'SELECT 1' : $tp15b_fail;
+	};
+	tutorpress_pmpro_lds_assert( false === $tp15b_run( $tp15b_fb, $lv_fb ) && 2 === $tp15b_seen, '15b-fb' );
+	$wpdb->insert( $tp15b_map, array( 'group' => (int) $g_tgt, 'level' => (int) $lv_dup ), array( '%d', '%d' ) );
+	$tp15b_hi = (int) $wpdb->insert_id;
+	$tp15b_seen = 0;
+	$tp15b_del = function ( $sql ) use ( &$tp15b_seen, $tp15b_hi, $lv_dup, $g_tgt, $tp15b_map, $tp15b_has, $tp15b_fail ) {
+		if ( $tp15b_seen || false === stripos( $sql, 'delete' ) || false === strpos( $sql, $tp15b_map ) || false === strpos( $sql, '`id` = ' . $tp15b_hi . ' AND' ) || ! $tp15b_has( $sql, $lv_dup, $g_tgt ) ) { return $sql; }
+		$tp15b_seen = 1;
+		return $tp15b_fail;
+	};
+	tutorpress_pmpro_lds_assert( false === $tp15b_run( $tp15b_del, $lv_dup ) && 1 === $tp15b_seen && $tp15b_hi > 0, '15b-del' );
+	$tp15b_seen = 0;
+	$tp15b_fin = function ( $sql ) use ( &$tp15b_seen, $tp15b_has, $lv_ins, $g_tgt, $tp15b_fail ) {
+		if ( $tp15b_seen > 1 || false === stripos( $sql, 'select' ) || ! $tp15b_has( $sql, $lv_ins, $g_tgt ) ) { return $sql; }
+		++$tp15b_seen;
+		return 1 === $tp15b_seen ? $sql : $tp15b_fail;
+	};
+	tutorpress_pmpro_lds_assert( false === $tp15b_run( $tp15b_fin, $lv_ins ) && 2 === $tp15b_seen, '15b-fin' );
+	tutorpress_pmpro_lds_pass( '15B-seams' );
+	$tp15b_ids = function ( $level, $group ) use ( $wpdb, $tp15b_map ) {
+		return array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$tp15b_map} WHERE level = %d AND `group` = %d ORDER BY id ASC", $level, $group ) ) );
+	};
+	tutorpress_pmpro_lds_assert( array( (int) $oid ) === $tp15b_ids( $lv_dup, $g_oth ) && array( (int) $xid ) === $tp15b_ids( $lv_oth, $g_tgt ), '15b-unrelated' );
+	tutorpress_pmpro_lds_assert( array() === $tp15b_ids( $lv_fb, $g_tgt ) && array( (int) $lo, (int) $tp15b_hi ) === $tp15b_ids( $lv_dup, $g_tgt ) && 1 === count( $tp15b_ids( $lv_ins, $g_tgt ) ), '15b-no-success' );
+	$tp15b_seen = 0;
+	$GLOBALS['tutorpress_pmpro_lds_reg']['hooks'][] = array( 'query', $tp15b_pre );
+	add_filter( 'query', $tp15b_pre );
+	$wpdb->last_error = '';
+	$tp15b_arm = $inv( 'write_p10_new_insert_evidence', $p15, $lv_oth, 'course-bundle' );
+	remove_filter( 'query', $tp15b_pre );
+	$wpdb->last_error = '';
+	tutorpress_pmpro_lds_assert( false === $tp15b_arm && 1 === $tp15b_seen && array( (int) $xid ) === $tp15b_ids( $lv_oth, $g_tgt ), '15b-caller' ); delete_pmpro_membership_level_meta( $lv_oth, 'tutorpress_bundle_id' ); delete_pmpro_membership_level_meta( $lv_oth, 'tutorpress_managed' );
+	$tp15b_inner_seen = 0; $tp15b_outer_seen = 0; $tp15b_inner_obs = array(); $tp15b_outer_obs = array(); $tp15b_inner = null; $tp15b_zero = false;
+	$tp15b_make_cap = function ( &$seen, &$obs ) use ( $tp15b_has, $lv_dup, $g_tgt, $wpdb ) {
+		$fn = function ( $sql ) use ( &$fn, &$seen, &$obs, $tp15b_has, $lv_dup, $g_tgt, $wpdb ) {
+			if ( false === stripos( $sql, 'select' ) || ! $tp15b_has( $sql, $lv_dup, $g_tgt ) ) { return $sql; }
+			++$seen;
+			remove_filter( 'query', $fn );
+			$obs = array_map( 'intval', (array) $wpdb->get_col( $sql ) );
+			add_filter( 'query', $fn );
+			return $sql;
+		};
+		return $fn;
+	};
+	$tp15b_inner_cap = $tp15b_make_cap( $tp15b_inner_seen, $tp15b_inner_obs );
+	$tp15b_outer_cap = $tp15b_make_cap( $tp15b_outer_seen, $tp15b_outer_obs );
+	$tp15b_overlap = function ( $sql ) use ( &$tp15b_overlap, &$tp15b_outer_cap, &$tp15b_inner_cap, &$tp15b_inner, &$tp15b_zero, $inv, $p15, $lv_dup, $g_tgt, $tp15b_hi, $tp15b_has, $tp15b_map, $wpdb ) {
+		if ( false === stripos( $sql, 'delete' ) || false === strpos( $sql, '`id` = ' . $tp15b_hi . ' AND' ) || ! $tp15b_has( $sql, $lv_dup, $g_tgt ) ) { return $sql; }
+		remove_filter( 'query', $tp15b_overlap );
+		remove_filter( 'query', $tp15b_outer_cap );
+		$GLOBALS['tutorpress_pmpro_lds_reg']['hooks'][] = array( 'query', $tp15b_inner_cap );
+		add_filter( 'query', $tp15b_inner_cap );
+		$wpdb->last_error = '';
+		$tp15b_inner = $inv( 'add_level_to_course_group', $p15, $lv_dup, 'courses', null );
+		remove_filter( 'query', $tp15b_inner_cap );
+		$tp15b_zero = ( '' === $wpdb->last_error && '0' === (string) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$tp15b_map} WHERE id = %d", $tp15b_hi ) ) );
+		$wpdb->last_error = '';
+		add_filter( 'query', $tp15b_outer_cap );
+		add_filter( 'query', $tp15b_overlap );
+		return $sql;
+	};
+	foreach ( array( $tp15b_outer_cap, $tp15b_overlap ) as $tp15b_fn ) { $GLOBALS['tutorpress_pmpro_lds_reg']['hooks'][] = array( 'query', $tp15b_fn ); add_filter( 'query', $tp15b_fn ); }
+	$wpdb->last_error = '';
+	$tp15b_outer = $inv( 'add_level_to_course_group', $p15, $lv_dup, 'courses', null );
+	remove_filter( 'query', $tp15b_outer_cap );
+	remove_filter( 'query', $tp15b_overlap );
+	$wpdb->last_error = '';
+	tutorpress_pmpro_lds_assert( true === $tp15b_inner && true === $tp15b_outer && true === $tp15b_zero && 2 === $tp15b_inner_seen && 2 === $tp15b_outer_seen && array( (int) $lo ) === $tp15b_inner_obs && array( (int) $lo ) === $tp15b_outer_obs, '15b-observed' );
+	tutorpress_pmpro_lds_pass( '15B-completion' );
+	$c15n = $lid + 49; $c15v = $lid + 50; $c15s = $lid + 51; $lv15s = $lid + 52;
+	foreach ( array( '15c-npost' => $c15n, '15c-vpost' => $c15v, '15c-spost' => $c15s ) as $tp15c_mark => $c15 ) {
+		$tp15c_id = (int) wp_insert_post( array( 'import_id' => $c15, 'post_type' => 'courses', 'post_status' => 'publish', 'post_title' => 'tp15c-' . $c15 ) );
+		$GLOBALS['tutorpress_pmpro_lds_reg']['posts'][] = $tp15c_id;
+		tutorpress_pmpro_lds_assert( $tp15c_id === $c15, $tp15c_mark );
+	}
+	if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
+	$tp15c_pay = function ( $level ) use ( $wpdb ) {
+		return (float) $wpdb->get_var( $wpdb->prepare( "SELECT initial_payment FROM {$wpdb->pmpro_membership_levels} WHERE id = %d", $level ) );
+	};
+	$tp15c_pages = function ( $level ) use ( $wpdb ) {
+		return array_map( 'strval', (array) $wpdb->get_col( $wpdb->prepare( "SELECT page_id FROM {$wpdb->pmpro_memberships_pages} WHERE membership_id = %d", $level ) ) );
+	};
+	$tp15c_map = function ( $level ) use ( $wpdb ) {
+		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_membership_levels_groups} WHERE level = %d", $level ) );
+	};
+	update_post_meta( $c15n, 'tutor_course_selling_option', 'one_time' ); update_post_meta( $c15n, 'tutor_course_price', 9 ); delete_post_meta( $c15n, 'tutor_course_sale_price' ); delete_post_meta( $c15n, '_tutorpress_pmpro_levels' );
+	$inv( 'auto_create_one_time_level', $c15n, 'course' );
+	if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
+	$ns15 = (int) ( array_map( 'intval', (array) get_post_meta( $c15n, '_tutorpress_pmpro_levels', true ) )[0] ?? 0 );
+	tutorpress_pmpro_lds_assert( $ns15 > 0 && 9.0 === $tp15c_pay( $ns15 ) && 9.0 === (float) get_pmpro_membership_level_meta( $ns15, 'tutorpress_regular_price', true ) && 0 === (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->pmpro_membership_levelmeta} WHERE pmpro_membership_level_id = %d AND meta_key = %s", $ns15, 'tutorpress_sale_price' ) ) && array( (string) $c15n ) === $tp15c_pages( $ns15 ) && '' === (string) get_post_meta( $c15n, '_tutorpress_pmpro_group_id', true ) && 0 === $tp15c_map( $ns15 ), '15c-nosale' );
+	update_post_meta( $c15v, 'tutor_course_selling_option', 'one_time' ); update_post_meta( $c15v, 'tutor_course_price', 9 ); update_post_meta( $c15v, 'tutor_course_sale_price', 4 ); delete_post_meta( $c15v, '_tutorpress_pmpro_levels' );
+	$inv( 'auto_create_one_time_level', $c15v, 'course' );
+	if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
+	$vs15 = (int) ( array_map( 'intval', (array) get_post_meta( $c15v, '_tutorpress_pmpro_levels', true ) )[0] ?? 0 );
+	tutorpress_pmpro_lds_assert( $vs15 > 0 && 9.0 === $tp15c_pay( $vs15 ) && 9.0 === (float) get_pmpro_membership_level_meta( $vs15, 'tutorpress_regular_price', true ) && 4.0 === (float) get_pmpro_membership_level_meta( $vs15, 'tutorpress_sale_price', true ) && array( (string) $c15v ) === $tp15c_pages( $vs15 ) && '' === (string) get_post_meta( $c15v, '_tutorpress_pmpro_group_id', true ) && 0 === $tp15c_map( $vs15 ), '15c-sale' );
+	$wpdb->insert( $wpdb->pmpro_membership_levels, array( 'id' => $lv15s, 'name' => 'tp15c-' . $lv15s, 'description' => '', 'confirmation' => '', 'initial_payment' => 3, 'billing_amount' => 0, 'cycle_number' => 0, 'cycle_period' => '', 'billing_limit' => 0, 'trial_amount' => 0, 'trial_limit' => 0, 'allow_signups' => 0 ) );
+	$wpdb->insert( $wpdb->pmpro_memberships_pages, array( 'membership_id' => $lv15s, 'page_id' => $c15s ) );
+	$wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $lv15s, 'meta_key' => 'tutorpress_managed', 'meta_value' => '1' ) );
+	$wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $lv15s, 'meta_key' => 'tutorpress_course_id', 'meta_value' => (string) $c15s ) );
+	$wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $lv15s, 'meta_key' => 'tutorpress_regular_price', 'meta_value' => '3' ) );
+	$wpdb->insert( $lm, array( 'pmpro_membership_level_id' => $lv15s, 'meta_key' => 'tutorpress_sale_price', 'meta_value' => '1' ) );
+	update_post_meta( $c15s, 'tutor_course_selling_option', 'one_time' ); update_post_meta( $c15s, 'tutor_course_price', 9 ); update_post_meta( $c15s, 'tutor_course_sale_price', 4 ); update_post_meta( $c15s, '_tutorpress_pmpro_levels', array( $lv15s ) );
+	if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
+	$inv( 'auto_create_one_time_level', $c15s, 'course' );
+	tutorpress_pmpro_lds_assert( array( $lv15s ) === array_map( 'intval', (array) get_post_meta( $c15s, '_tutorpress_pmpro_levels', true ) ) && 3.0 === $tp15c_pay( $lv15s ) && 3.0 === (float) get_pmpro_membership_level_meta( $lv15s, 'tutorpress_regular_price', true ) && 1.0 === (float) get_pmpro_membership_level_meta( $lv15s, 'tutorpress_sale_price', true ) && array( (string) $c15s ) === $tp15c_pages( $lv15s ) && '' === (string) get_post_meta( $c15s, '_tutorpress_pmpro_group_id', true ) && 0 === $tp15c_map( $lv15s ), '15c-survivor' );
+	tutorpress_pmpro_lds_pass( '15C-fixtures' );
+} catch ( Throwable $ex ) { fwrite( STDERR, $ex->getMessage() . ' ' . $ex->getFile() . ':' . $ex->getLine() . "\n" ); $tutorpress_pmpro_lds_failed = true; } finally { $tutorpress_pmpro_lds_automatic_cleanup(); }
+register_shutdown_function( $tutorpress_pmpro_lds_automatic_cleanup );
+if ( $tutorpress_pmpro_lds_failed ) { exit( 1 ); }
