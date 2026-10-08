@@ -456,6 +456,32 @@ try {
 	if ( '1' === (string) $wpdb->get_var( 'SELECT @@session.in_transaction' ) ) { $wpdb->query( 'COMMIT' ); }
 	$inv( 'auto_create_one_time_level', $c15s, 'course' );
 	tutorpress_pmpro_lds_assert( array( $lv15s ) === array_map( 'intval', (array) get_post_meta( $c15s, '_tutorpress_pmpro_levels', true ) ) && 3.0 === $tp15c_pay( $lv15s ) && 3.0 === (float) get_pmpro_membership_level_meta( $lv15s, 'tutorpress_regular_price', true ) && 1.0 === (float) get_pmpro_membership_level_meta( $lv15s, 'tutorpress_sale_price', true ) && array( (string) $c15s ) === $tp15c_pages( $lv15s ) && '' === (string) get_post_meta( $c15s, '_tutorpress_pmpro_group_id', true ) && 0 === $tp15c_map( $lv15s ), '15c-survivor' );
+	require_once dirname( __DIR__, 2 ) . '/includes/rest/class-pmpro-subscriptions-controller.php';
+	$tp15c_ctl = new TutorPress_PMPro_Subscriptions_Controller();
+	$tp15c_plans = function ( $course ) use ( $tp15c_ctl ) {
+		$r = new WP_REST_Request( 'GET', '/tutorpress/v1/subscriptions' );
+		$r->set_param( 'course_id', $course );
+		$d = $tp15c_ctl->get_course_subscriptions( $r )->get_data();
+		return (array) ( is_array( $d ) && isset( $d['data']['plans'] ) ? $d['data']['plans'] : array() );
+	};
+	$tp15c_plan = function ( $course, $level ) use ( $tp15c_plans ) {
+		$plans = $tp15c_plans( $course );
+		return ( 1 === count( $plans ) && (int) ( $plans[0]['id'] ?? 0 ) === (int) $level ) ? $plans[0] : null;
+	};
+	$tp15c_col = $tp15c_plan( $c15n, $ns15 );
+	tutorpress_pmpro_lds_assert( is_array( $tp15c_col ) && null === $tp15c_col['sale_price'] && 9.0 === (float) $tp15c_col['enrollment_fee'] && 0.0 === (float) $tp15c_col['regular_price'], '15c-col-nosale' );
+	update_pmpro_membership_level_meta( $vs15, 'sale_price', '99' );
+	$tp15c_col = $tp15c_plan( $c15v, $vs15 );
+	tutorpress_pmpro_lds_assert( is_array( $tp15c_col ) && 4.0 === (float) $tp15c_col['sale_price'] && 9.0 === (float) $tp15c_col['enrollment_fee'] && 0.0 === (float) $tp15c_col['regular_price'], '15c-col-sale' );
+	$tp15c_col = $tp15c_plan( $c15s, $lv15s );
+	tutorpress_pmpro_lds_assert( is_array( $tp15c_col ) && 1.0 === (float) $tp15c_col['sale_price'] && 3.0 === (float) $tp15c_col['enrollment_fee'] && 0.0 === (float) $tp15c_col['regular_price'], '15c-col-survivor' );
+	update_pmpro_membership_level_meta( $ns15, 'tutorpress_sale_price', '9' );
+	update_pmpro_membership_level_meta( $ns15, 'sale_price', '2' );
+	$tp15c_col = $tp15c_plan( $c15n, $ns15 );
+	tutorpress_pmpro_lds_assert( is_array( $tp15c_col ) && 2.0 === (float) $tp15c_col['sale_price'] && 9.0 === (float) $tp15c_col['enrollment_fee'] && 0.0 === (float) $tp15c_col['regular_price'], '15c-col-not-below' );
+	delete_pmpro_membership_level_meta( $ns15, 'tutorpress_sale_price' );
+	$tp15c_col = $tp15c_plan( $c15n, $ns15 );
+	tutorpress_pmpro_lds_assert( is_array( $tp15c_col ) && 2.0 === (float) $tp15c_col['sale_price'] && 9.0 === (float) $tp15c_col['enrollment_fee'] && 0.0 === (float) $tp15c_col['regular_price'], '15c-col-legacy' );
 	tutorpress_pmpro_lds_pass( '15C-fixtures' );
 } catch ( Throwable $ex ) { fwrite( STDERR, $ex->getMessage() . ' ' . $ex->getFile() . ':' . $ex->getLine() . "\n" ); $tutorpress_pmpro_lds_failed = true; } finally { $tutorpress_pmpro_lds_automatic_cleanup(); }
 register_shutdown_function( $tutorpress_pmpro_lds_automatic_cleanup );

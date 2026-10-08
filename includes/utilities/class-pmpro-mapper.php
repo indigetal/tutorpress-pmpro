@@ -81,6 +81,7 @@ class TutorPress_PMPro_Mapper {
         $l = is_object( $level ) ? (array) $level : (array) $level;
         // Read level meta values (UI-only fields)
         $meta_sale = null;
+        $meta_tutorpress_sale = null;
         $meta_provide_certificate = null;
         $meta_is_featured = null;
         $meta_regular_initial_payment = null;
@@ -90,6 +91,7 @@ class TutorPress_PMPro_Mapper {
         
         if ( function_exists( 'get_pmpro_membership_level_meta' ) ) {
             $meta_sale = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'sale_price', true );
+            $meta_tutorpress_sale = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'tutorpress_sale_price', true );
             $meta_provide_certificate = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'provide_certificate', true );
             $meta_is_featured = get_pmpro_membership_level_meta( $l['id'] ?? 0, 'is_featured', true );
             
@@ -115,6 +117,14 @@ class TutorPress_PMPro_Mapper {
             $enrollment_fee = floatval( $meta_regular_price );
         }
 
+        $sale_price = ( $meta_sale !== '' && $meta_sale !== null && $meta_sale !== false ) ? $meta_sale : null;
+        if ( is_scalar( $meta_tutorpress_sale ) && '' !== $meta_tutorpress_sale && null !== $meta_tutorpress_sale && false !== $meta_tutorpress_sale ) {
+            $checkout_sale_amount = floatval( $meta_tutorpress_sale );
+            if ( $checkout_sale_amount > 0 && $checkout_sale_amount < $enrollment_fee ) {
+                $sale_price = $meta_tutorpress_sale;
+            }
+        }
+
         return array(
             'id'                => (int) ( $l['id'] ?? 0 ),
             'plan_name'         => $l['name'] ?? '',
@@ -130,7 +140,7 @@ class TutorPress_PMPro_Mapper {
             'recurring_limit'   => isset( $l['billing_limit'] ) ? intval( $l['billing_limit'] ) : 0,
             'trial_value'       => isset( $l['trial_limit'] ) ? intval( $l['trial_limit'] ) : 0,
             'trial_fee'         => isset( $l['trial_amount'] ) ? floatval( $l['trial_amount'] ) : 0.0,
-            'sale_price'        => ( $meta_sale !== '' && $meta_sale !== null && $meta_sale !== false ) ? $meta_sale : null,
+            'sale_price'        => $sale_price,
             'sale_price_from'   => ( $meta_sale_from !== '' && $meta_sale_from !== null && $meta_sale_from !== false ) ? $meta_sale_from : null,
             'sale_price_to'     => ( $meta_sale_to !== '' && $meta_sale_to !== null && $meta_sale_to !== false ) ? $meta_sale_to : null,
             'provide_certificate'=> is_null( $meta_provide_certificate ) ? null : (bool) $meta_provide_certificate,
