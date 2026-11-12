@@ -125,6 +125,44 @@ class TutorPress_PMPro_Mapper {
             }
         }
 
+        // Delay and expiration. An empty id or a missing reader is the empty result.
+        $level_id = $l['id'] ?? 0;
+
+        $subscription_delay = '';
+        if ( ! empty( $level_id ) && function_exists( 'pmpro_get_subscription_delay' ) ) {
+            $subscription_delay = pmpro_get_subscription_delay( $level_id );
+        }
+        if ( empty( $subscription_delay ) ) {
+            $subscription_delay_type = 'none';
+        } elseif ( is_numeric( $subscription_delay ) ) {
+            $subscription_delay_type = 'days';
+        } else {
+            $subscription_delay_type = 'date';
+        }
+
+        $expiration_date_pattern = '';
+        if ( ! empty( $level_id ) && function_exists( 'pmpro_get_set_expiration_date' ) ) {
+            $expiration_date_pattern = pmpro_get_set_expiration_date( $level_id );
+        }
+        if ( empty( $expiration_date_pattern ) ) {
+            $expiration_date_pattern = '';
+        } else {
+            $expiration_date_pattern = (string) $expiration_date_pattern;
+        }
+
+        $expiration_number = isset( $l['expiration_number'] ) ? intval( $l['expiration_number'] ) : 0;
+        $allowed_periods   = array( 'Hour', 'Day', 'Week', 'Month', 'Year' );
+        $raw_period        = isset( $l['expiration_period'] ) ? (string) $l['expiration_period'] : '';
+        $expiration_period = in_array( $raw_period, $allowed_periods, true ) ? $raw_period : 'Month';
+
+        if ( ! empty( $expiration_date_pattern ) ) {
+            $expiration_type = 'date';
+        } elseif ( $expiration_number > 0 ) {
+            $expiration_type = 'duration';
+        } else {
+            $expiration_type = 'none';
+        }
+
         return array(
             'id'                => (int) ( $l['id'] ?? 0 ),
             'plan_name'         => $l['name'] ?? '',
@@ -146,6 +184,13 @@ class TutorPress_PMPro_Mapper {
             'provide_certificate'=> is_null( $meta_provide_certificate ) ? null : (bool) $meta_provide_certificate,
             'is_featured'       => is_null( $meta_is_featured ) ? null : (bool) $meta_is_featured,
             'status'            => 'active',
+            'subscription_delay_type'    => $subscription_delay_type,
+            'subscription_delay_days'    => ( 'days' === $subscription_delay_type ) ? max( 1, intval( $subscription_delay ) ) : 0,
+            'subscription_delay_pattern' => ( 'date' === $subscription_delay_type ) ? (string) $subscription_delay : '',
+            'expiration_type'            => $expiration_type,
+            'expiration_number'          => $expiration_number,
+            'expiration_period'          => $expiration_period,
+            'expiration_date_pattern'    => $expiration_date_pattern,
         );
     }
 
