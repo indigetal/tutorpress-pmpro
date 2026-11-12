@@ -459,6 +459,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( is_wp_error( $recurring_limit ) ) {
 			return $recurring_limit;
 		}
+		$subscription_delay = $this->validate_supplied_subscription_delay( $request );
+		if ( is_wp_error( $subscription_delay ) ) {
+			return $subscription_delay;
+		}
 
 		// Prepare level data mapping using mapper helper
 		$mapper = new \TutorPress_PMPro_Mapper();
@@ -521,6 +525,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( ! $level_id ) {
 			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to determine new level ID.', 'tutorpress-pmpro' ), 'database_error', 500 );
 		}
+
+		$this->save_subscription_delay( $level_id, $request );
 
 		// Associate level with course/bundle via pmpro_memberships_pages and level meta
 		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
@@ -673,6 +679,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( is_wp_error( $recurring_limit ) ) {
 			return $recurring_limit;
 		}
+		$subscription_delay = $this->validate_supplied_subscription_delay( $request );
+		if ( is_wp_error( $subscription_delay ) ) {
+			return $subscription_delay;
+		}
 
         // Normalize create/update semantics depending on payment_type
         $payment_type = $request->get_param( 'payment_type' );
@@ -738,6 +748,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( ! $updated ) {
 			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to update PMPro level.', 'tutorpress-pmpro' ), 'update_failed', 500 );
 		}
+
+		$this->save_subscription_delay( $plan_id, $request );
 
 		// Optionally update mapping (course/bundle association)
 		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
@@ -1178,6 +1190,80 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			__( 'Recurring limit must be a nonnegative integer.', 'tutorpress-pmpro' ),
 			array( 'status' => 400 )
 		);
+	}
+
+	/**
+	 * Validate a supplied subscription delay type before mapping or writes.
+	 *
+	 * Omission returns null. A present value must be one of the three strings.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return string|null|WP_Error
+	 */
+	private function validate_supplied_subscription_delay( $request ) {
+		if ( ! $request->has_param( 'subscription_delay_type' ) ) {
+			return null;
+		}
+
+		$type = $request->get_param( 'subscription_delay_type' );
+		if ( in_array( $type, array( 'none', 'days', 'date' ), true ) ) {
+			return $type;
+		}
+
+		return new WP_Error(
+			'invalid_subscription_delay_type',
+			__( 'Subscription delay type must be none, days, or date.', 'tutorpress-pmpro' ),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * Store or delete pmpro_subscription_delay_{id}.
+	 *
+	 * One-time payment deletes the option. A recurring request that omits
+	 * subscription_delay_type leaves it. Days uses PHP empty(), as at
+	 * save-level.php.
+	 *
+	 * @param int             $level_id Level id.
+	 * @param WP_REST_Request $request  Request.
+	 * @return void
+	 */
+	private function save_subscription_delay( $level_id, $request ) {
+		$level_id = (int) $level_id;
+		if ( $level_id < 1 ) {
+			return;
+		}
+
+		$option_name = 'pmpro_subscription_delay_' . $level_id;
+		if ( 'one_time' === $request->get_param( 'payment_type' ) ) {
+			delete_option( $option_name );
+			return;
+		}
+		if ( ! $request->has_param( 'subscription_delay_type' ) ) {
+			return;
+		}
+
+		$type = $request->get_param( 'subscription_delay_type' );
+		if ( 'days' === $type ) {
+			$days = $request->get_param( 'subscription_delay_days' );
+			if ( empty( $days ) || ! is_scalar( $days ) ) {
+				delete_option( $option_name );
+				return;
+			}
+			update_option( $option_name, max( 1, intval( $days ) ), false );
+			return;
+		}
+		if ( 'date' === $type ) {
+			$raw     = $request->get_param( 'subscription_delay_pattern' );
+			$pattern = is_scalar( $raw ) ? strtoupper( sanitize_text_field( (string) $raw ) ) : '';
+			if ( '' !== $pattern ) {
+				update_option( $option_name, $pattern, false );
+				return;
+			}
+		}
+		if ( 'none' === $type || 'date' === $type ) {
+			delete_option( $option_name );
+		}
 	}
 
 	/**
