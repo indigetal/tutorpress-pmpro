@@ -463,6 +463,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( is_wp_error( $subscription_delay ) ) {
 			return $subscription_delay;
 		}
+		$expiration = $this->validate_supplied_expiration( $request );
+		if ( is_wp_error( $expiration ) ) {
+			return $expiration;
+		}
 
 		// Prepare level data mapping using mapper helper
 		$mapper = new \TutorPress_PMPro_Mapper();
@@ -682,6 +686,10 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		$subscription_delay = $this->validate_supplied_subscription_delay( $request );
 		if ( is_wp_error( $subscription_delay ) ) {
 			return $subscription_delay;
+		}
+		$expiration = $this->validate_supplied_expiration( $request );
+		if ( is_wp_error( $expiration ) ) {
+			return $expiration;
 		}
 
         // Normalize create/update semantics depending on payment_type
@@ -1214,6 +1222,75 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			'invalid_subscription_delay_type',
 			__( 'Subscription delay type must be none, days, or date.', 'tutorpress-pmpro' ),
 			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * Validate a supplied expiration before mapping or writes.
+	 *
+	 * Omission returns null. A valid result carries type, number, and period.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return array|null|WP_Error
+	 */
+	private function validate_supplied_expiration( $request ) {
+		if ( ! $request->has_param( 'expiration_type' ) ) {
+			return null;
+		}
+
+		$type = $request->get_param( 'expiration_type' );
+		if ( ! in_array( $type, array( 'none', 'duration', 'date' ), true ) ) {
+			return new WP_Error(
+				'invalid_expiration_type',
+				__( 'Expiration type must be none, duration, or date.', 'tutorpress-pmpro' ),
+				array( 'status' => 400 )
+			);
+		}
+		if ( 'duration' !== $type ) {
+			return array(
+				'type'   => $type,
+				'number' => 0,
+				'period' => '0',
+			);
+		}
+
+		$number            = $request->get_param( 'expiration_number' );
+		$normalized_number = null;
+		if ( is_int( $number ) && $number >= 1 ) {
+			$normalized_number = $number;
+		} elseif ( is_string( $number ) && ctype_digit( $number ) && (int) $number >= 1 ) {
+			$normalized_number = (int) $number;
+		}
+		if ( null === $normalized_number ) {
+			return new WP_Error(
+				'invalid_expiration_number',
+				__( 'Expiration number must be an integer of at least 1.', 'tutorpress-pmpro' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$period            = $request->get_param( 'expiration_period' );
+		$normalized_period = '';
+		if ( is_string( $period ) ) {
+			foreach ( array( 'Hour', 'Day', 'Week', 'Month', 'Year' ) as $allowed_period ) {
+				if ( 0 === strcasecmp( $period, $allowed_period ) ) {
+					$normalized_period = $allowed_period;
+					break;
+				}
+			}
+		}
+		if ( '' === $normalized_period ) {
+			return new WP_Error(
+				'invalid_expiration_period',
+				__( 'Expiration period must be Hour, Day, Week, Month, or Year.', 'tutorpress-pmpro' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return array(
+			'type'   => 'duration',
+			'number' => $normalized_number,
+			'period' => $normalized_period,
 		);
 	}
 
