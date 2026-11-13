@@ -868,6 +868,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( ! class_exists( '\\TUTORPRESS_PMPRO\\PMPro_Level_Cleanup' ) ) { require_once __DIR__ . '/../utilities/class-pmpro-level-cleanup.php'; }
 		$code = \TUTORPRESS_PMPRO\PMPro_Level_Removal_Coordinator::remove_level( $plan_id, $object_id );
 		if ( in_array( $code, array( 'ok', 'committed_with_warning' ), true ) ) {
+			$this->delete_schedule_options_if_level_gone( $plan_id );
 			return rest_ensure_response( TutorPress_Subscription_Utils::format_success_response( 'committed_with_warning' === $code ? array( 'warning' => true ) : null, __( 'PMPro membership level removed.', 'tutorpress-pmpro' ) ) );
 		}
 		$map = array( 'missing' => 404, 'protected' => 409, 'ineligible' => 409, 'ownership_conflict' => 409, 'busy' => 409, 'conflict' => 409 ); return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to delete PMPro level.', 'tutorpress-pmpro' ), $code, isset( $map[ $code ] ) ? $map[ $code ] : 500 );
@@ -936,6 +937,8 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( ! $new_id ) {
 			return TutorPress_Subscription_Utils::format_error_response( __( 'Failed to duplicate PMPro level.', 'tutorpress-pmpro' ), 'database_error', 500 );
 		}
+
+		$this->copy_schedule_options( $plan_id, $new_id );
 
 		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
 		if ( $object_id ) {
@@ -1390,6 +1393,61 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		if ( 'none' === $type || 'duration' === $type || 'date' === $type ) {
 			delete_option( $option_name );
 		}
+	}
+
+	/**
+	 * Copy non-empty delay and set-expiration options onto a new level id.
+	 *
+	 * The stored values are copied unchanged. Source options stay in place.
+	 *
+	 * @param int $old_id Source level id.
+	 * @param int $new_id New level id.
+	 * @return void
+	 */
+	private function copy_schedule_options( $old_id, $new_id ) {
+		$old_id = (int) $old_id;
+		$new_id = (int) $new_id;
+		if ( $old_id < 1 || $new_id < 1 ) {
+			return;
+		}
+
+		foreach ( array( 'pmpro_subscription_delay_', 'pmprosed_' ) as $prefix ) {
+			$stored = get_option( $prefix . $old_id, false );
+			if ( empty( $stored ) ) {
+				continue;
+			}
+			update_option( $prefix . $new_id, $stored, false );
+		}
+	}
+
+	/**
+	 * Delete delay and set-expiration options after the level row is gone.
+	 *
+	 * A query error or a surviving row leaves both options in place.
+	 *
+	 * @param int $plan_id Level id.
+	 * @return void
+	 */
+	private function delete_schedule_options_if_level_gone( $plan_id ) {
+		$plan_id = (int) $plan_id;
+		if ( $plan_id < 1 ) {
+			return;
+		}
+
+		global $wpdb;
+		$wpdb->last_error = '';
+		$level_row_id     = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT id FROM {$wpdb->pmpro_membership_levels} WHERE id = %d",
+				$plan_id
+			)
+		);
+		if ( '' !== $wpdb->last_error || null !== $level_row_id ) {
+			return;
+		}
+
+		delete_option( 'pmpro_subscription_delay_' . $plan_id );
+		delete_option( 'pmprosed_' . $plan_id );
 	}
 
 	/**
