@@ -505,6 +505,12 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			$db_level_data['allow_signups'] = 0;
 		}
 
+		// Assign even when the values are integer 0 and the string '0'.
+		if ( is_array( $expiration ) ) {
+			$db_level_data['expiration_number'] = $expiration['number'];
+			$db_level_data['expiration_period'] = $expiration['period'];
+		}
+
 		// Insert level using PMPro helper if available
 		if ( function_exists( 'pmpro_insert_or_replace' ) ) {
 			$table = $wpdb->pmpro_membership_levels;
@@ -531,6 +537,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 
 		$this->save_subscription_delay( $level_id, $request );
+		$this->save_set_expiration_date( $level_id, $request );
 
 		// Associate level with course/bundle via pmpro_memberships_pages and level meta
 		$object_id = (int) ( $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' ) );
@@ -727,6 +734,12 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			$update_data['cycle_period'] = ucfirst( strtolower( $request->get_param( 'recurring_interval' ) ) );
 		}
 
+		// date leaves both columns out, including integer 0 and the string '0'.
+		if ( is_array( $expiration ) && 'date' !== $expiration['type'] ) {
+			$update_data['expiration_number'] = $expiration['number'];
+			$update_data['expiration_period'] = $expiration['period'];
+		}
+
 		// Apply update via PMPro level functions if available
 		$updated = false;
 		// If there are no level fields to update, skip DB/update calls and consider as updated
@@ -758,6 +771,7 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 		}
 
 		$this->save_subscription_delay( $plan_id, $request );
+		$this->save_set_expiration_date( $plan_id, $request );
 
 		// Optionally update mapping (course/bundle association)
 		$object_id = $request->get_param( 'object_id' ) ?? $request->get_param( 'course_id' );
@@ -1339,6 +1353,41 @@ class TutorPress_PMPro_Subscriptions_Controller extends TutorPress_REST_Controll
 			}
 		}
 		if ( 'none' === $type || 'date' === $type ) {
+			delete_option( $option_name );
+		}
+	}
+
+	/**
+	 * Store or delete pmprosed_{id}.
+	 *
+	 * A missing expiration_type leaves the option. none, duration, and an
+	 * empty date pattern delete it. A non-empty date pattern is stored
+	 * uppercased, with autoload false. One-time payment uses these same rules.
+	 *
+	 * @param int             $level_id Level id.
+	 * @param WP_REST_Request $request  Request.
+	 * @return void
+	 */
+	private function save_set_expiration_date( $level_id, $request ) {
+		$level_id = (int) $level_id;
+		if ( $level_id < 1 ) {
+			return;
+		}
+		if ( ! $request->has_param( 'expiration_type' ) ) {
+			return;
+		}
+
+		$option_name = 'pmprosed_' . $level_id;
+		$type        = $request->get_param( 'expiration_type' );
+		if ( 'date' === $type ) {
+			$raw     = $request->get_param( 'expiration_date_pattern' );
+			$pattern = is_scalar( $raw ) ? strtoupper( trim( sanitize_text_field( (string) $raw ) ) ) : '';
+			if ( '' !== $pattern ) {
+				update_option( $option_name, $pattern, false );
+				return;
+			}
+		}
+		if ( 'none' === $type || 'duration' === $type || 'date' === $type ) {
 			delete_option( $option_name );
 		}
 	}
